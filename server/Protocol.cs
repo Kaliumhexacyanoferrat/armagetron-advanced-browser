@@ -69,3 +69,5 @@ public record SyncEvent(double Time, double[][] C, string T = "sync");
 public record SettingsEvent(object Settings, string T = "settings");
 
 public record ServerList(RoomInfo[] Servers, int Online);
+
+public record PhaseEvent(string Phase, double Next, string T = "phase");

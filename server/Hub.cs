@@ -13,13 +13,13 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
     {
         var client = new Client(connection);
 
-        if (_clients.Count >= Lobby.MaxClients)
+        _clients[connection] = client;
+
+        if (_clients.Count > Lobby.MaxClients)
         {
             client.Close("The server is full right now. Please try again later.");
             return ValueTask.CompletedTask;
         }
-
-        _clients[connection] = client;
 
         client.Send(new Welcome(Lobby.Version, lobby.Now));
 
@@ -86,15 +86,37 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnClose(IReactiveConnection connection, IWebsocketFrame frame)
+    // pongs go through the client's queue too: one writer per socket
+    public ValueTask OnPing(IReactiveConnection connection, IWebsocketFrame frame)
+    {
+        if (_clients.TryGetValue(connection, out var client))
+        {
+            client.Pong(frame.Data);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask OnClose(IReactiveConnection connection, IWebsocketFrame frame)
     {
         if (_clients.TryRemove(connection, out var client))
         {
             client.Room?.Post(client, "gone", default);
-            client.Close();
-        }
 
-        return ValueTask.CompletedTask;
+            // the socket is only answered once nothing else writes to it
+            await client.ShutdownAsync();
+        }
+        else
+        {
+            try
+            {
+                await connection.CloseAsync();
+            }
+            catch (Exception)
+            {
+                // gone already
+            }
+        }
     }
 
     public ValueTask<bool> OnError(IReactiveConnection connection, FrameError error) => ValueTask.FromResult(true);

@@ -48,6 +48,8 @@ public sealed partial class Room
 
         // the bots go when the last human does
         _players.RemoveAll(p => p.IsBot);
+
+        UpdateInfo();
     }
 
     private void Game(double now)
@@ -301,6 +303,8 @@ public sealed partial class Room
         }
 
         _playersChanged = true;
+
+        Send(new PhaseEvent("over", _nextRound));
 
         UpdateInfo();
     }

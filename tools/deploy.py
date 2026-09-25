@@ -39,8 +39,13 @@ for d in dep.get('diagnostics') or []:
     print(' ', d)
 
 if '--media' in sys.argv:
+    # files go up base64 encoded in JSON, at most 1 MB each; the server looks
+    # for them when it starts, so deploy once more after the first upload
+    import base64
+    request('PUT', f'/lambdas/{key}/folders/media')
     media = os.path.join(root, 'media')
     for f in sorted(os.listdir(media)):
         data = open(os.path.join(media, f), 'rb').read()
-        request('PUT', f'/lambdas/{key}/files/media/{f}', data)
+        body = json.dumps({'Content': base64.b64encode(data).decode()}).encode()
+        request('PUT', f'/lambdas/{key}/files/media%2F{f}', body, 'application/json')
         print('uploaded media/' + f, len(data))

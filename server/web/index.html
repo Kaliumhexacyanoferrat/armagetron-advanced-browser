@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Armagetron Advanced</title>
+  <meta name="description" content="Armagetron Advanced in the browser: light cycles on a grid. Start your own server, send the link to your friends, and play.">
+  <link rel="icon" href="tex/icon.png">
+  <link rel="preload" href="fonts/Armagetronad.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="grid" aria-hidden="true"></canvas>
+
+<!-- ============================ the front page ============================ -->
+<section id="lobby">
+  <header class="hero">
+    <img src="tex/title.jpg" alt="Armagetron Advanced: two light cycles, blue and yellow, on the grid">
+    <div class="hero-text">
+      <h1>Armagetron Advanced</h1>
+      <p>Light cycles on the grid, in your browser. Start a server, send the link, and race your friends into the wall.</p>
+      <div class="actions">
+        <button id="quick" class="big primary">Play now</button>
+        <button id="create-open" class="big">Create a server</button>
+      </div>
+      <p class="small dim" id="online">Connecting...</p>
+    </div>
+  </header>
+
+  <main class="lobby-grid">
+    <section class="panel" id="servers-panel">
+      <div class="panel-head">
+        <h2>Servers</h2>
+        <span class="small dim" id="server-count"></span>
+      </div>
+      <div id="servers" class="servers">
+        <p class="dim">Looking for servers...</p>
+      </div>
+    </section>
+
+    <section class="panel" id="profile">
+      <h2>You</h2>
+      <label class="field">
+        <span>Name</span>
+        <input id="name" maxlength="15" autocomplete="nickname" placeholder="Your name" spellcheck="false">
+      </label>
+      <div class="field">
+        <span>Colour</span>
+        <div class="color-row">
+          <canvas id="swatch" width="96" height="96" aria-label="Your cycle's colour"></canvas>
+          <div class="sliders">
+            <label>R <input type="range" id="cr" min="0" max="15"></label>
+            <label>G <input type="range" id="cg" min="0" max="15"></label>
+            <label>B <input type="range" id="cb" min="0" max="15"></label>
+          </div>
+        </div>
+        <div class="presets" id="presets"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="howto">
+      <h2>How to play</h2>
+      <p>Your cycle never stops, and it leaves a wall behind it. Make the others crash into a wall before you do; the last one riding wins the round.</p>
+      <p>Drive close along a wall to go faster. <em>Rubber</em> saves you for a moment when you drive into one. Your brake lasts a second and slowly fills up again.</p>
+      <table class="keys">
+        <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd></td><td>turn left or right</td></tr>
+        <tr><td><kbd>&darr;</kbd> or <kbd>S</kbd> / <kbd>Space</kbd></td><td>brake</td></tr>
+        <tr><td><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd></td><td>glance left, back, right</td></tr>
+        <tr><td><kbd>V</kbd></td><td>switch camera</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>chat</td></tr>
+        <tr><td><kbd>Tab</kbd></td><td>score table</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>menu, settings and keys</td></tr>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      A browser port of <a href="https://www.armagetronad.org/" target="_blank" rel="noopener">Armagetron Advanced</a>,
+      with its textures, models, sounds and music, under the GNU General Public License version 2.
+      The servers run on <a href="https://genhttp.dev/" target="_blank" rel="noopener">GenHTTP</a>.
+    </p>
+  </footer>
+</section>
+
+<!-- ============================ the game ============================ -->
+<section id="game" hidden>
+  <canvas id="view"></canvas>
+  <canvas id="cockpit"></canvas>
+  <div id="tags"></div>
+  <div id="console" class="empty"></div>
+  <div id="center"></div>
+  <div id="status" hidden></div>
+  <div id="scores" hidden></div>
+  <form id="chat" hidden autocomplete="off">
+    <label for="chat-input">Say:</label>
+    <input id="chat-input" maxlength="120" spellcheck="false">
+  </form>
+  <div id="touch" hidden>
+    <button data-touch="left" aria-label="Turn left">&#9664;</button>
+    <button data-touch="brake" aria-label="Brake">&#9660;</button>
+    <button data-touch="right" aria-label="Turn right">&#9654;</button>
+  </div>
+
+  <nav id="menu" hidden>
+    <h2 id="menu-title">Armagetron Advanced</h2>
+    <ul>
+      <li><button data-menu="resume">Resume</button></li>
+      <li><button data-menu="camera">Camera: <span id="menu-camera"></span></button></li>
+      <li><button data-menu="spectate"><span id="menu-spectate">Spectate</span></button></li>
+      <li><button data-menu="invite">Invite friends</button></li>
+      <li><button data-menu="settings">Settings</button></li>
+      <li id="menu-admin-item"><button data-menu="admin">Server administration</button></li>
+      <li><button data-menu="leave">Leave server</button></li>
+    </ul>
+    <p class="help" id="menu-help"></p>
+  </nav>
+</section>
+
+<!-- ============================ dialogs ============================ -->
+<dialog id="create">
+  <form method="dialog" id="create-form">
+    <h2>Create a server</h2>
+    <p class="dim small">You are its administrator: only you can change its settings, kick and ban. It stays open as long as people play on it.</p>
+    <div class="form-grid" id="create-fields"></div>
+    <p class="error" id="create-error"></p>
+    <div class="actions right">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary" id="create-ok">Create and play</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="password">
+  <form method="dialog">
+    <h2>Password</h2>
+    <p class="dim small" id="password-text">This server is protected by a password.</p>
+    <input id="password-input" type="password" autocomplete="off">
+    <div class="actions right">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="primary">Join</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="notice">
+  <form method="dialog">
+    <h2 id="notice-title">Notice</h2>
+    <p id="notice-text"></p>
+    <div class="actions right"><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<dialog id="settings" class="wide">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <div class="tabs">
+      <section>
+        <h3>Keys</h3>
+        <p class="dim small">Click a key, then press the new one. Each action takes up to three keys; Backspace clears.</p>
+        <table class="bindings" id="bindings"></table>
+        <button type="button" id="keys-reset" class="small-button">Back to the defaults</button>
+      </section>
+      <section>
+        <h3>Sound</h3>
+        <label class="field inline"><span>Effects</span><input type="range" id="set-volume" min="0" max="1" step="0.05"></label>
+        <label class="field inline"><span>Music</span><input type="range" id="set-music" min="0" max="1" step="0.05"></label>
+        <label class="check"><input type="checkbox" id="set-mute"> Mute everything</label>
+        <h3>Display</h3>
+        <label class="field inline"><span>Resolution</span>
+          <select id="set-quality">
+            <option value="0.5">Low (faster)</option>
+            <option value="0.75">Medium</option>
+            <option value="1">Full</option>
+          </select>
+        </label>
+        <label class="field inline"><span>Start camera</span><select id="set-camera"></select></label>
+        <label class="check"><input type="checkbox" id="set-names"> Names over cycles</label>
+        <label class="check"><input type="checkbox" id="set-map"> Map</label>
+        <label class="check"><input type="checkbox" id="set-clock"> Clock and frame rate</label>
+      </section>
+    </div>
+    <div class="actions right"><button value="ok" class="primary">Done</button></div>
+  </form>
+</dialog>
+
+<dialog id="admin" class="wide">
+  <form method="dialog" id="admin-form">
+    <h2>Server administration</h2>
+    <div class="tabs">
+      <section>
+        <h3>Players</h3>
+        <table class="admin-players" id="admin-players"></table>
+        <h3>Bans</h3>
+        <div id="admin-bans" class="dim small">Nobody is banned.</div>
+        <div class="actions">
+          <button type="button" id="admin-restart">Restart the match</button>
+        </div>
+      </section>
+      <section>
+        <h3>Rules</h3>
+        <div class="form-grid" id="admin-fields"></div>
+        <p class="dim small">Changes apply from the next round on.</p>
+      </section>
+    </div>
+    <div class="actions right">
+      <button value="cancel" formnovalidate>Close</button>
+      <button value="ok" class="primary">Save the rules</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="ban">
+  <form method="dialog">
+    <h2 id="ban-title">Ban</h2>
+    <label class="field"><span>For</span>
+      <select id="ban-minutes">
+        <option value="10">10 minutes</option>
+        <option value="60" selected>an hour</option>
+        <option value="1440">a day</option>
+        <option value="0">as long as the server runs</option>
+      </select>
+    </label>
+    <label class="field"><span>Reason (optional)</span><input id="ban-reason" maxlength="120"></label>
+    <div class="actions right">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button value="ok" class="danger">Ban</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
