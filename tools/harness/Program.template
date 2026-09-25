@@ -1,0 +1,57 @@
+var built = await Entry.BuildAsync();
+
+var handler = built switch
+{
+    IHandler ready => ready,
+    IHandlerBuilder builder => builder.Build(),
+    null => throw new InvalidOperationException("The snippet returned nothing to serve."),
+    _ => throw new InvalidOperationException($"The snippet returned {built.GetType().Name}, which is not a handler.")
+};
+
+var host = GenHTTP.Engine.Ioxide.Host.Create()
+                                  .Handler(handler)
+                                  .Defaults()
+                                  .Port(ushort.Parse(Environment.GetEnvironmentVariable("PORT") ?? "8080"));
+
+await host.StartAsync();
+
+Console.WriteLine("Listening on http://localhost:8080/ . Ctrl+C to stop.");
+
+/*
+ * Waits for a signal rather than for a keypress. Reading the
+ * console works right up until nobody is typing at it - a service
+ * unit, a container, anything with its input closed - where it
+ * returns straight away and the program stops the moment it has
+ * started.
+ */
+var shutdown = new TaskCompletionSource();
+
+void Stop(PosixSignalContext context)
+{
+    context.Cancel = true;
+    shutdown.TrySetResult();
+}
+
+using (PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop))
+using (PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop))
+{
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.TrySetResult(); };
+
+    await shutdown.Task;
+}
+
+Console.WriteLine("Stopping.");
+
+await host.StopAsync();
+
+static class Entry
+{
+    private static Folder Workspace => Lambda.Workspace;
+    private static Folder Assets => Lambda.Assets;
+
+    internal static async Task<object> BuildAsync()
+    {
+        await Task.CompletedTask;
+//LAMBDA//
+    }
+}
