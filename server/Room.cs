@@ -27,6 +27,9 @@ public sealed class RoomSettings
     // CYCLE_RUBBER: the original's default is 1, but most servers played with more
     public double Rubber = 5, WallsLength = -1, WallsStayUp = 8;
 
+    // IDLE_KICK_TIME, in minutes; 0 never kicks
+    public double IdleKick = 3, IdleKickSpectators = 30;
+
     public static RoomSettings From(JsonElement e, RoomSettings previous)
     {
         var p = previous ?? new RoomSettings();
@@ -46,7 +49,9 @@ public sealed class RoomSettings
             RoundLimit = Math.Clamp(e.Int("roundLimit", p.RoundLimit), 1, 1000),
             Rubber = Math.Clamp(e.Num("rubber", p.Rubber), 0.5, 50),
             WallsLength = e.Num("wallsLength", p.WallsLength) is var wl && wl > 0 ? Math.Clamp(wl, 20, 5000) : -1,
-            WallsStayUp = Math.Clamp(e.Num("wallsStayUp", p.WallsStayUp), -1, 60)
+            WallsStayUp = Math.Clamp(e.Num("wallsStayUp", p.WallsStayUp), -1, 60),
+            IdleKick = Math.Clamp(e.Num("idleKick", p.IdleKick), 0, 60),
+            IdleKickSpectators = Math.Clamp(e.Num("idleKickSpectators", p.IdleKickSpectators), 0, 240)
         };
     }
 
@@ -80,7 +85,8 @@ public sealed class RoomSettings
         ["maxPlayers"] = MaxPlayers, ["minPlayers"] = MinPlayers, ["aiIq"] = AiIq,
         ["sizeFactor"] = SizeFactor, ["speedFactor"] = SpeedFactor,
         ["scoreLimit"] = ScoreLimit, ["roundLimit"] = RoundLimit,
-        ["rubber"] = Rubber, ["wallsLength"] = WallsLength, ["wallsStayUp"] = WallsStayUp
+        ["rubber"] = Rubber, ["wallsLength"] = WallsLength, ["wallsStayUp"] = WallsStayUp,
+        ["idleKick"] = IdleKick, ["idleKickSpectators"] = IdleKickSpectators
     };
 }
 
@@ -119,6 +125,11 @@ public sealed class Player
     public int LastTurnN;
 
     public double LastRename = -100;
+
+    // idle kick: when the player last pressed anything, and whether they were warned since
+    public double LastInput;
+
+    public bool IdleWarned;
 
     // spam protection (nSpamProtection)
     public double SpamLevel, SpamTime;
@@ -160,7 +171,7 @@ public sealed partial class Room
 
     private double _now;
 
-    private double _lastInfo = -10, _lastPlayers = -10;
+    private double _lastInfo = -10, _lastPlayers = -10, _lastIdleCheck = -10;
 
     private bool _playersChanged = true;
 
@@ -280,6 +291,11 @@ public sealed partial class Room
         {
             UpdateInfo();
         }
+
+        if (now - _lastIdleCheck >= 1)
+        {
+            KickIdle();
+        }
     }
 
     private void Handle(Client client, string type, JsonElement message)
@@ -293,6 +309,12 @@ public sealed partial class Room
         var player = Find(client);
 
         if (player == null) return;
+
+        if (type != "gone")
+        {
+            player.LastInput = _now;
+            player.IdleWarned = false;
+        }
 
         switch (type)
         {
@@ -395,7 +417,8 @@ public sealed partial class Room
             R = client.R,
             G = client.G,
             B = client.B,
-            Admin = admin
+            Admin = admin,
+            LastInput = _now
         };
 
         var playing = Humans.Count(p => !p.WantsSpectator);

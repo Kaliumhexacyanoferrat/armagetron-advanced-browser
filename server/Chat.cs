@@ -311,7 +311,41 @@ public sealed partial class Room
         }
     }
 
-    private void Kick(Player by, Player target, string reason)
+    /// <summary>
+    /// IDLE_KICK_TIME: whoever pressed nothing for that long is warned, and
+    /// half a minute later kicked. Spectators may idle much longer.
+    /// </summary>
+    private void KickIdle()
+    {
+        _lastIdleCheck = _now;
+
+        const double warning = 30;
+
+        foreach (var p in Humans.ToList())
+        {
+            var minutes = p.WantsSpectator ? Settings.IdleKickSpectators : Settings.IdleKick;
+
+            if (minutes <= 0) continue;
+
+            var left = minutes * 60 - (_now - p.LastInput);
+
+            if (left <= 0)
+            {
+                var span = minutes == 1 ? "a minute" : $"{minutes} minutes";
+
+                Kick(null, p, $"You were kicked for being idle: you pressed nothing for {span}.", idle: true);
+            }
+            else if (left <= warning && !p.IdleWarned && minutes * 60 > warning * 2)
+            {
+                p.IdleWarned = true;
+
+                Tell(p, $"0xff7f7fYou will be kicked for being idle in {Math.Ceiling(left)} seconds. Press any key to stay.");
+                p.Client?.Send(new Center($"0xff7f7fIdle? Press any key within {Math.Ceiling(left)} seconds to stay.", 5));
+            }
+        }
+    }
+
+    private void Kick(Player by, Player target, string reason, bool idle = false)
     {
         if (target.IsBot)
         {
@@ -327,17 +361,20 @@ public sealed partial class Room
 
         var client = target.Client;
 
-        _kicked[client.Cid != "" ? client.Cid : client.Address] = _now + 60;
-        _kicked[client.Address] = _now + 60;
+        if (!idle)
+        {
+            _kicked[client.Cid != "" ? client.Cid : client.Address] = _now + 60;
+            _kicked[client.Address] = _now + 60;
+        }
 
         // out first: a quick rejoin must not be taken for this room's leaving
-        Leave(target, $"{target.Colored} 0xff7f7fwas kicked.");
+        Leave(target, idle ? $"{target.Colored} 0xff7f7fwas kicked for being idle." : $"{target.Colored} 0xff7f7fwas kicked.");
 
         client.Send(new Kicked(string.IsNullOrWhiteSpace(reason)
             ? "You have been kicked by the server administrator; please stay away."
             : reason));
 
-        _log($"{Names.Visible(target.Name)} kicked from '{Settings.Name}' ({Id})");
+        _log($"{Names.Visible(target.Name)} {(idle ? "idle-kicked" : "kicked")} from '{Settings.Name}' ({Id})");
     }
 
     private void BanPlayer(Player by, Player target, double minutes, string reason)
@@ -432,6 +469,18 @@ public sealed partial class Room
         if (old.WallsStayUp != next.WallsStayUp) changes.Add($"walls stay up {next.WallsStayUp} s");
         if (old.ScoreLimit != next.ScoreLimit) changes.Add($"score limit {next.ScoreLimit}");
         if (old.RoundLimit != next.RoundLimit) changes.Add($"{next.RoundLimit} rounds per match");
+        if (old.IdleKick != next.IdleKick) changes.Add(next.IdleKick > 0 ? $"idle players kicked after {next.IdleKick} min" : "idle players stay");
+        if (old.IdleKickSpectators != next.IdleKickSpectators) changes.Add(next.IdleKickSpectators > 0 ? $"idle spectators kicked after {next.IdleKickSpectators} min" : "idle spectators stay");
+
+        if (old.IdleKick != next.IdleKick || old.IdleKickSpectators != next.IdleKickSpectators)
+        {
+            // a shorter limit starts counting now, it does not kick at once
+            foreach (var p in _players)
+            {
+                p.LastInput = _now;
+                p.IdleWarned = false;
+            }
+        }
 
         if (changes.Count > 0)
         {

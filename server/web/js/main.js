@@ -485,6 +485,16 @@ class App {
     this.freeInput = { forward: false, backward: false, left: false, right: false, up: false, down: false };
     const held = new Set();
 
+    // any key or tap tells the server we are still here: it kicks idle players
+    let lastActive = -Infinity;
+    const active = () => {
+      if (!this.room || performance.now() - lastActive < 10000) return;
+      lastActive = performance.now();
+      this.net.send({ t: 'active' });
+    };
+    window.addEventListener('keydown', active, true);
+    window.addEventListener('pointerdown', active, true);
+
     const typing = () => {
       const a = document.activeElement;
       return a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA') || document.querySelector('dialog[open]');

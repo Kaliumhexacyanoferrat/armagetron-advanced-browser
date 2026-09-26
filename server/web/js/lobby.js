@@ -22,11 +22,14 @@ export const RULES = [
   { key: 'wallsStayUp', label: 'Walls of the fallen', options: [[0, 'vanish at once'], [2, 'stay 2 seconds'], [8, 'stay 8 seconds'], [-1, 'stay for the round']] },
   { key: 'scoreLimit', label: 'A match goes to', options: [[30, '30 points'], [50, '50 points'], [100, '100 points'], [200, '200 points'], [500, '500 points']] },
   { key: 'roundLimit', label: 'or at most', options: [[5, '5 rounds'], [10, '10 rounds'], [20, '20 rounds'], [50, '50 rounds']] },
+  { key: 'idleKick', label: 'Kick idle players after', options: [[0, 'never'], [1, '1 minute'], [2, '2 minutes'], [3, '3 minutes'], [5, '5 minutes'], [10, '10 minutes']] },
+  { key: 'idleKickSpectators', label: 'Kick idle spectators after', options: [[0, 'never'], [10, '10 minutes'], [30, '30 minutes'], [60, '1 hour'], [120, '2 hours']] },
 ];
 
 export const DEFAULT_RULES = {
   name: '', password: '', maxPlayers: 8, minPlayers: 4, aiIq: 50, sizeFactor: -3, speedFactor: 0,
   rubber: 5, wallsLength: -1, wallsStayUp: 8, scoreLimit: 100, roundLimit: 10,
+  idleKick: 3, idleKickSpectators: 30,
 };
 
 export function buildRuleFields(container, values) {
