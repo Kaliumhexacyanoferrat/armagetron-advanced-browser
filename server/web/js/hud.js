@@ -76,7 +76,7 @@ export class Hud {
     this.fps = 60;
     this.started = performance.now();
     this.mapMode = 0;
-    // touch screens have turn pads in the lower corners: the corner items move out of their way
+    // touch screens: the cockpit is only the map, small, under the icons at the top right
     this.touch = matchMedia('(pointer: coarse)').matches;
     this.images = {};
     for (const n of ['gauge', 'gauge_filled', 'clock', 'map_floor']) {
@@ -169,6 +169,7 @@ export class Hud {
   showScores(on) {
     this.scoresOpen = on;
     this.scoresEl.hidden = !on;
+    this.onScores?.();
   }
 
   renderScores(players, you) {
@@ -286,7 +287,12 @@ export class Hud {
     this.S = Math.min(H, W * 0.75);
 
     // top: clock, time and frame rate
-    if (this.prefs.clock !== false) this.drawTop(state);
+    if (this.prefs.clock !== false && !this.touch) this.drawTop(state);
+
+    if (this.touch) {
+      if (state.showCockpit) this.minimap(state);
+      return;
+    }
 
     if (!state.showCockpit) return;
     const c = state.cycle;
@@ -311,7 +317,7 @@ export class Hud {
     // scores
     const me = state.myScore, top = state.topScore;
     const color = me === top ? '#ff9d50' : me > top ? '#11ff11' : '#11ffff';
-    this.label(-0.93, this.touch ? -0.55 : -0.88, 0.04, [['Me:', 'Top:'], [String(me), String(top)]], color, 'Scores');
+    this.label(-0.93, -0.88, 0.04, [['Me:', 'Top:'], [String(me), String(top)]], color, 'Scores');
 
     this.minimap(state);
   }
@@ -488,8 +494,13 @@ export class Hud {
     if (!game.world) return;
     const ctx = this.ctx;
     const size = game.world.map.size;
-    const half = Math.min(this.SX(0.25), this.SY(0.25));
-    const cx = this.X(this.touch ? 0.64 : 0.73), cy = this.Y(-0.72);
+    let half = Math.min(this.SX(0.25), this.SY(0.25));
+    let cx = this.X(0.73), cy = this.Y(-0.72);
+    if (this.touch) {
+      half = Math.min(this.W, this.H) * 0.12;
+      cx = this.W - 12 - half;
+      cy = 60 + half;
+    }
     const focus = state.focus;
     const mode = MAP_MODES[this.mapMode % MAP_MODES.length];
 

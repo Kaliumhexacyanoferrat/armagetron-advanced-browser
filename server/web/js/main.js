@@ -275,6 +275,7 @@ class App {
     this.chatting = new Set();
     this.spectateWish = undefined;
     this.closeChat(false);
+    this.gameEl.classList.remove('console-on');
     this.gameEl.hidden = true;
     this.closeMenu();
     this.audio.silence();
@@ -422,14 +423,14 @@ class App {
     if (!this.net.open) {
       // the reconnect message stays
     } else if (game.phase === 'idle' && !own) {
-      this.hud.status(this.isSpectator() ? 'You are watching. Press B to play.' : 'Waiting for the next round...');
+      this.hud.status(this.isSpectator() ? `You are watching. ${this.touch ? 'Spectate is in the menu.' : 'Press B to play.'}` : 'Waiting for the next round...');
     } else if (!own && game.world && game.phase !== 'idle') {
       const w = focusCycle ? strip(game.names.get(focusCycle.id)?.name ?? '') : null;
       this.hud.status(this.isSpectator()
-        ? (w ? `Watching ${w}. ← → to switch, B to play.` : 'You are watching. Press B to play.')
+        ? (w ? `Watching ${w}. ${this.touch ? 'Tap left or right to switch.' : '← → to switch, B to play.'}` : `You are watching. ${this.touch ? 'Spectate is in the menu.' : 'Press B to play.'}`)
         : (w ? `Watching ${w}. You join the next round.` : 'You join the next round.'));
     } else if (own && !own.alive && focusCycle) {
-      this.hud.status(`Watching ${strip(game.names.get(focusCycle.id)?.name ?? '')}. ← → to switch.`);
+      this.hud.status(`Watching ${strip(game.names.get(focusCycle.id)?.name ?? '')}. ${this.touch ? 'Tap left or right to switch.' : '← → to switch.'}`);
     } else {
       this.hud.status('');
     }
@@ -550,44 +551,109 @@ class App {
       this.closeChat(false);
     });
 
-    // touch screens: the lower third turns and brakes
-    if (matchMedia('(pointer: coarse)').matches) {
-      const touch = document.getElementById('touch');
-      touch.hidden = false;
-      touch.addEventListener('pointerdown', (e) => {
-        const b = e.target.closest('button');
-        if (!b) return;
-        e.preventDefault();
-        this.audio.unlock();
-        b.classList.add('down');
-        const a = b.dataset.touch;
-        if (a === 'brake') {
-          // the release counts wherever the finger lifts
-          b.setPointerCapture(e.pointerId);
-          this.act('brake', true);
-        } else {
-          this.act(a, true);
-        }
-      });
-      const release = (e) => {
-        const b = e.target.closest?.('button');
-        b?.classList.remove('down');
-        if (b?.dataset.touch === 'brake') this.act('brake', false);
-      };
-      touch.addEventListener('pointerup', release);
-      touch.addEventListener('pointercancel', release);
-      touch.addEventListener('pointerout', (e) => {
-        const b = e.target.closest?.('button');
-        if (b && b.dataset.touch !== 'brake') b.classList.remove('down');
-      });
-      this.gameEl.addEventListener('dblclick', () => this.toggleMenu());
-    }
+    // touch screens: the whole screen is for playing, three zones to turn
+    // left, brake and turn right; everything else is behind the icons at the top right
+    this.touch = matchMedia('(pointer: coarse)').matches;
+    if (this.touch) this.setupTouch();
 
     this.gameEl.addEventListener('mousemove', () => {
       this.gameEl.classList.add('pointer');
       clearTimeout(this.pointerTimer);
       this.pointerTimer = setTimeout(() => this.gameEl.classList.remove('pointer'), 1500);
     });
+  }
+
+  setupTouch() {
+    this.gameEl.classList.add('touch');
+    this.hud.onScores = () => this.updateActions();
+    const touch = document.getElementById('touch');
+    touch.hidden = false;
+    const flash = (b) => {
+      b.classList.add('down');
+      clearTimeout(b.flash);
+      b.flash = setTimeout(() => b.classList.remove('down'), 150);
+    };
+    touch.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      e.preventDefault();
+      this.audio.unlock();
+      if (b.dataset.touch === 'brake') {
+        // held as long as the finger stays down, wherever it lifts
+        b.setPointerCapture(e.pointerId);
+        b.classList.add('down');
+        this.act('brake', true);
+      } else {
+        flash(b);
+        this.act(b.dataset.touch, true);
+      }
+    });
+    const release = (e) => {
+      const b = e.target.closest?.('button');
+      if (b?.dataset.touch !== 'brake') return;
+      b.classList.remove('down');
+      this.act('brake', false);
+    };
+    touch.addEventListener('pointerup', release);
+    touch.addEventListener('pointercancel', release);
+
+    const actions = document.getElementById('actions');
+    actions.hidden = false;
+    const leave = actions.querySelector('[data-action="leave"]');
+    actions.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-action]');
+      if (!b) return;
+      this.audio.unlock();
+      switch (b.dataset.action) {
+        case 'scores':
+          this.act('scores', true);
+          break;
+        case 'chat':
+          this.toggleTouchChat();
+          break;
+        case 'menu':
+          this.toggleMenu();
+          break;
+        case 'leave':
+          // a second tap within three seconds: not left by accident
+          if (leave.classList.contains('confirm')) {
+            leave.classList.remove('confirm');
+            this.leave();
+          } else {
+            leave.classList.add('confirm');
+            this.hud.showCenter('0xff7f7fTap the door again to leave', 2);
+            clearTimeout(this.leaveTimer);
+            this.leaveTimer = setTimeout(() => leave.classList.remove('confirm'), 3000);
+          }
+          break;
+      }
+      this.updateActions();
+    });
+
+    // the chat lines, when shown: tapping them writes
+    this.hud.consoleEl.addEventListener('click', () => {
+      if (this.chatEl().hidden) this.openChat();
+    });
+    // the phone's keyboard closed without sending
+    document.getElementById('chat-input').addEventListener('blur', () => {
+      if (!this.chatEl().hidden) this.closeChat();
+    });
+  }
+
+  /** The chat icon: shows the chat and opens the line to write; again hides it. */
+  toggleTouchChat() {
+    const on = !this.gameEl.classList.contains('console-on');
+    this.gameEl.classList.toggle('console-on', on);
+    if (on) this.openChat();
+    else this.closeChat(!this.chatEl().hidden);
+  }
+
+  updateActions() {
+    if (!this.touch) return;
+    const actions = document.getElementById('actions');
+    actions.querySelector('[data-action="scores"]').classList.toggle('on', !!this.hud.scoresOpen);
+    actions.querySelector('[data-action="chat"]').classList.toggle('on', this.gameEl.classList.contains('console-on'));
+    actions.querySelector('[data-action="menu"]').classList.toggle('on', !document.getElementById('menu').hidden);
   }
 
   freeKeys(code, down) {
@@ -676,6 +742,7 @@ class App {
   openChat() {
     const chat = this.chatEl();
     chat.hidden = false;
+    this.gameEl.classList.add('typing');
     this.hud.chatOpen = true;
     this.hud.renderConsole();
     const input = document.getElementById('chat-input');
@@ -688,6 +755,7 @@ class App {
   closeChat(tell = true) {
     const chat = this.chatEl();
     chat.hidden = true;
+    this.gameEl.classList.remove('typing');
     this.hud.chatOpen = false;
     this.hud.renderConsole();
     document.getElementById('chat-input').blur();
@@ -776,6 +844,7 @@ class App {
       menu.hidden = false;
       this.game?.brake(false);
       this.updateMenu();
+      this.updateActions();
       menu.querySelector('button').focus();
     } else {
       this.closeMenu();
@@ -785,6 +854,7 @@ class App {
   closeMenu() {
     document.getElementById('menu').hidden = true;
     document.activeElement?.blur?.();
+    this.updateActions();
   }
 
   updateMenu() {

@@ -428,70 +428,111 @@ dialog h3 { margin: 1rem 0 0.4rem; font-size: 1.05rem; }
 
 #menu .help { color: #ffcccc; font-size: 0.9rem; min-height: 1.5em; margin-top: 3vmin; max-width: 40rem; text-align: center; }
 
-/* touch screens: the lower third is three big zones, each with a pad to show where it is */
+/* ------------------------------------------------------------ touch screens */
+
+/* everything for playing: the whole screen is three zones, turn left, brake, turn right */
 #touch {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   display: grid;
-  grid-template-columns: 1fr 0.6fr 1fr;
-  height: 34vh;
+  grid-template-columns: 2fr 1fr 2fr;
 }
 
 #touch button {
-  --pad: clamp(52px, 15vmin, 80px);
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 0 0 max(10px, env(safe-area-inset-bottom));
+  padding: 0 0 max(14px, env(safe-area-inset-bottom));
   background: none;
   border: 0;
   border-radius: 0;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: clamp(26px, 8vmin, 48px);
+  line-height: 1;
   touch-action: none;
-  -webkit-tap-highlight-color: transparent;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s, color 0.1s;
 }
 
-#touch [data-touch="left"] { justify-content: flex-start; padding-left: max(14px, env(safe-area-inset-left)); }
-#touch [data-touch="right"] { justify-content: flex-end; padding-right: max(14px, env(safe-area-inset-right)); }
-/* above the speed gauge */
-#touch [data-touch="brake"] { --pad: clamp(40px, 11vmin, 60px); align-items: flex-start; padding: 6px 0 0; }
+#touch [data-touch="brake"] {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: clamp(20px, 6vmin, 36px);
+}
 
-#touch .pad {
-  display: grid;
-  place-items: center;
-  width: var(--pad);
-  height: var(--pad);
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  background: rgba(0, 0, 0, 0.35);
+#touch button.down {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* the rest behind small icons at the top right, away from the thumbs */
+#actions {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  display: flex;
+  gap: 6px;
+}
+
+#actions button {
+  width: 42px;
+  height: 42px;
+  padding: 9px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   color: rgba(255, 255, 255, 0.85);
-  font-size: calc(var(--pad) * 0.42);
-  line-height: 1;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6);
-  transition: background 0.08s, border-color 0.08s, transform 0.08s;
+  -webkit-tap-highlight-color: transparent;
 }
 
-#touch button.down .pad {
-  background: rgba(255, 255, 255, 0.3);
-  border-color: #fff;
-  color: #fff;
-  transform: scale(0.94);
+#actions svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* phones: the game's text smaller, so it leaves room for the grid */
-@media (pointer: coarse) {
-  #console { font-size: max(10px, 2.3vmin); max-width: 55vw; left: max(2.5vw, env(safe-area-inset-left)); }
-  #scores { font-size: max(10px, 2.4vmin); padding: 0.4rem 0.7rem; top: 12%; }
-  #scores td, #scores th { padding-right: 0.5rem; }
-  #chat { font-size: max(12px, 2.5vmin); bottom: 36vh; }
-  #menu button { font-size: max(16px, 5vmin); padding: 0.5vmin 1rem; }
-  #menu h2 { font-size: max(20px, 6.5vmin); }
-  #menu .help { font-size: 0.75rem; padding: 0 1rem; }
-  .tag { font-size: max(10px, 3.3vmin); }
+#actions button.on { color: #fff; border-color: var(--title); background: rgba(60, 60, 140, 0.6); }
+#actions button.confirm { color: #fff; border-color: #ff7f7f; background: rgba(190, 40, 40, 0.85); }
+
+/* no cockpit text, no chat unless asked for; the rest smaller */
+#game.touch:not(.console-on) #console { display: none; }
+#game.touch #console {
+  top: max(8px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  max-width: calc(100vw - 230px);
+  font-size: max(11px, 2.3vmin);
+  pointer-events: auto;
+  z-index: 3;
 }
+/* writing: the line to write at the top, the chat under it (the phone's keyboard covers the bottom) */
+#game.touch #chat {
+  top: max(8px, env(safe-area-inset-top));
+  bottom: auto;
+  left: max(8px, env(safe-area-inset-left));
+  width: calc(100vw - 230px);
+  z-index: 3;
+  font-size: 16px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--title);
+}
+#game.touch.typing #console { top: calc(max(8px, env(safe-area-inset-top)) + 48px); }
+#game.touch #scores { top: 60px; font-size: max(11px, 2.4vmin); padding: 0.4rem 0.7rem; }
+#game.touch #scores td, #game.touch #scores th { padding-right: 0.5rem; }
+#game.touch #status { top: 30%; font-size: max(12px, 3vmin); }
+#game.touch #center { top: 40%; font-size: 8vmin; }
+#game.touch #menu { z-index: 4; background: rgba(0, 0, 0, 0.8); }
+#game.touch #actions { z-index: 5; }
+#game.touch #menu button { font-size: max(18px, 5vmin); padding: 0.8vmin 1.5rem; }
+#game.touch #menu h2 { font-size: max(20px, 6vmin); }
+#game.touch #menu .help { display: none; }
+#game.touch .tag { font-size: max(10px, 3vmin); }
 
 /* the original's bright background behind text too dark to read */
 .dark-text { background: rgba(255, 255, 255, 0.7); border-radius: 2px; padding: 0 0.15em; }
