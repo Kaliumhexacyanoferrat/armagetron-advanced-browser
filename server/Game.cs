@@ -30,6 +30,9 @@ public sealed partial class Room
 
     private double _start, _nextRound, _lastDeath;
 
+    /// <summary>How far the world has been simulated: where a rewound cycle catches up to.</summary>
+    private double _simulated;
+
     private bool _newMatch = true;
 
     private readonly Random _random = new();
@@ -88,7 +91,8 @@ public sealed partial class Room
                 break;
         }
 
-        if (_phase is Phase.Playing or Phase.RoundOver && now > _start)
+        // (half a step of slack: the ticks and the start are sums of floats)
+        if (_phase is Phase.Playing or Phase.RoundOver && now > _start + Dt / 2)
         {
             Simulate(now);
         }
@@ -143,6 +147,7 @@ public sealed partial class Room
 
         _round++;
         _start = now + Prepare;
+        _simulated = _start;
         _phase = Phase.Countdown;
         _lastDeath = _start;
 
@@ -204,6 +209,7 @@ public sealed partial class Room
         var cycle = new Cycle(p.Id, x, y, s.Dir, _start, _sim);
 
         p.Cycle = cycle;
+        p.LastTurnN = 0;
         _world.Cycles.Add(cycle);
     }
 
@@ -330,6 +336,8 @@ public sealed partial class Room
         }
 
         var deaths = _world.Step(_world.Cycles, Dt, OnQueuedTurn);
+
+        _simulated = now;
 
         foreach (var d in deaths)
         {
@@ -459,7 +467,7 @@ public sealed partial class Room
         var d = m.Int("d") >= 0 ? 1 : -1;
         var dist = m.Num("dist", c.Dist);
 
-        if (_phase == Phase.Countdown || _now <= _start)
+        if (_phase == Phase.Countdown || _now <= _start + Dt / 2)
         {
             // turning on the spot in the last second before the start
             if (_now >= _start - 1 && c.Time >= c.LastTurnTime + _sim.Delay * 0.95)
@@ -509,6 +517,11 @@ public sealed partial class Room
 
             if (c.Frozen)
             {
+                // crashed in the very step that went past the turn: it still counts
+                p.Pending.RemoveAt(0);
+
+                if (cmd.Dist < c.Dist - 1e-6 && Rewind(p, cmd.D, cmd.Dist)) continue;
+
                 // the browser thought it was further along than the server let it get
                 p.Pending.Clear();
                 return;
@@ -600,11 +613,12 @@ public sealed partial class Room
         _world.Turn(c, d);
         SendTurn(c);
 
-        // and forward again, on the same grid of steps as everybody else
-        while (c.Alive && !c.Frozen && c.Time < _now - 1e-9)
+        // and forward again, on the same grid of steps as everybody else, to
+        // where they are: turns arrive before this tick's step, which moves it on
+        while (c.Alive && !c.Frozen && c.Time < _simulated - 1e-9)
         {
             var next = _start + Math.Floor((c.Time - _start) / Dt + 1 + 1e-6) * Dt;
-            var dt = Math.Min(next, _now) - c.Time;
+            var dt = Math.Min(next, _simulated) - c.Time;
 
             if (dt <= 1e-9) break;
 

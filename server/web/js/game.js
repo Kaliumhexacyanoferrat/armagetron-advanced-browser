@@ -259,6 +259,11 @@ export class Game {
       return;
     }
 
+    // the server holds us at a crash, waiting for a turn of ours that may
+    // still avoid it: nothing to correct (moving us there would carry us
+    // through the wall and past the turn)
+    if (frozen) return;
+
     const h = this.history.find((s) => Math.abs(s.time - time) < 1e-4);
     if (!h || h.turns !== turns) return;
 
@@ -283,9 +288,17 @@ export class Game {
 
     const before = { x: c.x, y: c.y };
     if (c.turns === turns) {
-      c.x += c.dx * errDist;
-      c.y += c.dy * errDist;
-      c.dist += errDist;
+      // a correction never carries us through a wall: that is the server's
+      // to find out, and a turn sent from beyond it would come too late
+      let move = errDist;
+      if (move > 0) {
+        const gap = this.settings.rubberMinDistance;
+        const hit = this.world.ray(c.x, c.y, c.dx, c.dy, move + gap, c, c.time);
+        if (hit) move = Math.max(0, hit.t - gap);
+      }
+      c.x += c.dx * move;
+      c.y += c.dy * move;
+      c.dist += move;
     }
     c.v += errV;
     c.rubber = Math.max(0, c.rubber + errR);
