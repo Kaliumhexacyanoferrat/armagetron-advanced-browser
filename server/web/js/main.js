@@ -559,6 +559,7 @@ class App {
         if (!b) return;
         e.preventDefault();
         this.audio.unlock();
+        b.classList.add('down');
         const a = b.dataset.touch;
         if (a === 'brake') {
           // the release counts wherever the finger lifts
@@ -569,10 +570,16 @@ class App {
         }
       });
       const release = (e) => {
-        if (e.target.closest?.('button')?.dataset.touch === 'brake') this.act('brake', false);
+        const b = e.target.closest?.('button');
+        b?.classList.remove('down');
+        if (b?.dataset.touch === 'brake') this.act('brake', false);
       };
       touch.addEventListener('pointerup', release);
       touch.addEventListener('pointercancel', release);
+      touch.addEventListener('pointerout', (e) => {
+        const b = e.target.closest?.('button');
+        if (b && b.dataset.touch !== 'brake') b.classList.remove('down');
+      });
       this.gameEl.addEventListener('dblclick', () => this.toggleMenu());
     }
 
