@@ -97,7 +97,7 @@ class App {
       if (this.room) this.hud.status(`Connection lost. Reconnecting${this.net.retry > 1 ? ` (attempt ${this.net.retry})` : ''}...`);
     });
 
-    net.on('rooms', (m) => this.lobby.setRooms(m.rooms));
+    net.on('rooms', (m) => this.lobby.setRooms(m.rooms, m.total));
 
     net.on('created', (m) => {
       this.prefs.setToken(m.room, m.token);
@@ -142,10 +142,18 @@ class App {
 
     net.on('players', (m) => {
       this.players = m.list;
-      this.chatting = new Set(m.list.filter((p) => p.chatting).map((p) => p.id));
-      this.hud.renderScores(this.players, this.you);
-      if (this.adminOpen) this.renderAdminPlayers();
-      this.updateMenu();
+      this.playersChanged();
+    });
+
+    // just what changed since the last list: [id, score, kills, alive, chatting]
+    net.on('pc', (m) => {
+      for (const [id, score, kills, alive, chatting] of m.c) {
+        const p = this.players.find((x) => x.id === id);
+        if (p) Object.assign(p, { score, kills, alive: !!alive, chatting: !!chatting });
+      }
+      // the server's order: the best first, spectators last among equals
+      this.players.sort((a, b) => b.score - a.score || a.spectator - b.spectator);
+      this.playersChanged();
     });
 
     net.on('settings', (m) => {
@@ -169,6 +177,13 @@ class App {
       this.lobby.online(null);
       fetch('api/servers').then((r) => r.json()).then((s) => this.lobby.online(s.online)).catch(() => {});
     });
+  }
+
+  playersChanged() {
+    this.chatting = new Set(this.players.filter((p) => p.chatting).map((p) => p.id));
+    this.hud.renderScores(this.players, this.you);
+    if (this.adminOpen) this.renderAdminPlayers();
+    this.updateMenu();
   }
 
   join(room, password) {

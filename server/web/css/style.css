@@ -203,6 +203,9 @@ kbd {
 .server .count small { display: block; font-family: var(--font-text); color: var(--dim); }
 .server .lock { color: #ffd479; }
 .server.mine { border-color: rgba(255, 212, 121, 0.5); }
+.server.idle { opacity: 0.7; }
+.server.idle:focus-within, .server.idle:hover { opacity: 1; }
+.servers .more { text-align: center; margin: 0.3rem 0 0; }
 
 .empty-list { padding: 1.2rem; text-align: center; color: var(--dim); border: 1px dashed var(--line); border-radius: 8px; }
 

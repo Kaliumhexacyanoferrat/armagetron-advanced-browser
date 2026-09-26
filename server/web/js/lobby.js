@@ -88,7 +88,7 @@ export class Lobby {
     this.rooms = [];
     this.setupProfile();
     this.setupCreate();
-    document.getElementById('quick').addEventListener('click', () => this.quickPlay());
+    document.getElementById('quick').addEventListener('click', () => this.quickJoin());
     this.grid = new MenuGrid(document.getElementById('grid'));
     // the arrow keys walk the page like a menu
     window.addEventListener('keydown', (e) => {
@@ -208,20 +208,17 @@ export class Lobby {
   // ---------------------------------------------------------------------
   // The server list
 
-  setRooms(rooms) {
+  // The servers as the server sorts them: where people play and a place is
+  // free first, then full ones, then empty ones. Only the first few of many.
+  setRooms(rooms, total = rooms.length) {
     this.rooms = rooms;
-    this.listed = true;
-    if (this.quickWanted) {
-      this.quickWanted = false;
-      this.quickPlay();
-    }
     const list = document.getElementById('servers');
     // nothing changed: leave the list (and the keyboard focus in it) alone
-    const key = JSON.stringify(rooms) + Object.keys(this.prefs.tokens).join();
+    const key = JSON.stringify(rooms) + total + Object.keys(this.prefs.tokens).join();
     if (key === this.roomsKey) return;
     this.roomsKey = key;
     const focused = list.contains(document.activeElement) ? document.activeElement.closest('.server')?.dataset.id : null;
-    document.getElementById('server-count').textContent = rooms.length ? `${rooms.length} running` : '';
+    document.getElementById('server-count').textContent = total ? `${total} running` : '';
     if (!rooms.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-list';
@@ -231,7 +228,7 @@ export class Lobby {
     }
     list.replaceChildren(...rooms.map((r) => {
       const row = document.createElement('div');
-      row.className = 'server' + (this.prefs.token(r.id) ? ' mine' : '');
+      row.className = 'server' + (this.prefs.token(r.id) ? ' mine' : '') + (r.humans === 0 ? ' idle' : r.humans >= r.max ? ' full' : '');
       row.dataset.id = r.id;
       const info = document.createElement('div');
       const title = document.createElement('div');
@@ -262,24 +259,21 @@ export class Lobby {
       row.append(info, count, join);
       return row;
     }));
+    if (total > rooms.length) {
+      const more = document.createElement('p');
+      more.className = 'dim small more';
+      more.textContent = `and ${total - rooms.length} more; Quick join finds a place on any of them.`;
+      list.append(more);
+    }
     if (focused) list.querySelector(`[data-id="${focused}"] button`)?.focus({ preventScroll: true });
   }
 
-  quickPlay() {
+  // Quick join: the server picks one where people play and a place is free,
+  // or starts a new one (with AI players to race) if there is none
+  quickJoin() {
     this.app.audio.unlock();
-    if (!this.listed) {
-      // the list is on its way: decide when it is here
-      this.quickWanted = true;
-      return;
-    }
-    const open = this.rooms.filter((r) => !r.locked && r.humans < r.max).sort((a, b) => b.humans - a.humans);
-    if (open.length && open[0].humans > 0) {
-      this.app.join(open[0].id);
-    } else {
-      // nobody around: a server of your own, with AI players to race
-      const name = this.prefs.name || 'Player';
-      this.app.net.send({ t: 'create', settings: { ...DEFAULT_RULES, name: `${strip(name)}'s server` } });
-    }
+    const name = this.prefs.name || 'Player';
+    this.app.net.send({ t: 'quick', settings: { ...DEFAULT_RULES, name: `${strip(name)}'s server` } });
   }
 
   // ---------------------------------------------------------------------

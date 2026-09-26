@@ -550,6 +550,16 @@ public sealed partial class Room
 
     private void Center(string text, double duration = 5) => Send(new Center(text, duration));
 
+    // what the browsers were told last about the players, to send only what changed
+    private readonly Dictionary<int, PlayerInfo> _told = [];
+
+    private double _lastFull = double.NegativeInfinity;
+
+    /// <summary>
+    /// The score table. Everything when somebody came, went or changed their
+    /// name or colour, and every ten seconds for the pings; in between just
+    /// the scores, kills and states that changed.
+    /// </summary>
     private void SendPlayers()
     {
         _lastPlayers = _now;
@@ -562,7 +572,46 @@ public sealed partial class Room
                                         p.Cycle is { Alive: true }, (int)Math.Round(p.Rtt * 1000), p.IsBot, p.Admin, p.Spectator, p.Kills, p.Chatting))
             .ToArray();
 
-        Send(new Players(list));
+        var full = _now - _lastFull >= 10 || list.Length != _told.Count;
+        List<int[]> changes = null;
+
+        foreach (var p in list)
+        {
+            if (full) break;
+
+            if (!_told.TryGetValue(p.Id, out var old)
+                || old with { Score = p.Score, Kills = p.Kills, Alive = p.Alive, Chatting = p.Chatting, Ping = p.Ping } != p)
+            {
+                full = true;
+                break;
+            }
+
+            if (old.Score != p.Score || old.Kills != p.Kills || old.Alive != p.Alive || old.Chatting != p.Chatting)
+            {
+                (changes ??= []).Add([p.Id, p.Score, p.Kills, p.Alive ? 1 : 0, p.Chatting ? 1 : 0]);
+            }
+        }
+
+        if (full)
+        {
+            _lastFull = _now;
+            _told.Clear();
+
+            foreach (var p in list) _told[p.Id] = p;
+
+            Send(new Players(list));
+            return;
+        }
+
+        if (changes == null) return;
+
+        foreach (var p in list)
+        {
+            // the ping stays as it was told
+            _told[p.Id] = p with { Ping = _told[p.Id].Ping };
+        }
+
+        Send(new PlayerChanges([.. changes]));
     }
 
     private void UpdateInfo()

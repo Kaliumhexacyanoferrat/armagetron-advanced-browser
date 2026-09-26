@@ -35,7 +35,7 @@ var hub = new Hub(lobby);
 lobby.EverySecond = hub.Sweep;
 
 var api = Inline.Create()
-                .Get("servers", () => new ServerList(lobby.List(), hub.Online));
+                .Get("servers", () => new ServerList(lobby.Top, lobby.Count, hub.Online));
 
 var media = Workspace.Exists("media/titletrack.ogg") ? Workspace.Files("media") : null;
 

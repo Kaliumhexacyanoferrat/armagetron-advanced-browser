@@ -11,6 +11,9 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
 {
     private readonly ConcurrentDictionary<IReactiveConnection, Client> _clients = new();
 
+    // connections per address, counted as they come and go (not by looking at all of them)
+    private readonly ConcurrentDictionary<string, int> _perAddress = new();
+
     public int Online => _clients.Count;
 
     /// <summary>Connections from one address at most (a household or an office shares one).</summary>
@@ -24,13 +27,15 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
 
             _clients[connection] = client;
 
+            var fromHere = _perAddress.AddOrUpdate(client.Address, 1, (_, n) => n + 1);
+
             if (_clients.Count > Lobby.MaxClients)
             {
                 client.Close("The server is full right now. Please try again later.");
                 return ValueTask.CompletedTask;
             }
 
-            if (_clients.Values.Count(c => c.Address == client.Address) > MaxPerAddress)
+            if (fromHere > MaxPerAddress)
             {
                 client.Close("Too many connections from your address.");
                 return ValueTask.CompletedTask;
@@ -115,6 +120,7 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
             case "list":
             case "create":
             case "join":
+            case "quick":
             case "leave":
                 lobby.Handle(client, type, message);
                 break;
@@ -148,7 +154,7 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
             else if (silent > TimeSpan.FromSeconds(90))
             {
                 // not even the close went through: the connection is dead
-                _clients.TryRemove(connection, out _);
+                if (_clients.TryRemove(connection, out _)) Forget(client);
             }
         }
     }
@@ -164,10 +170,20 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
         return ValueTask.CompletedTask;
     }
 
+    private void Forget(Client client)
+    {
+        if (_perAddress.AddOrUpdate(client.Address, 0, (_, n) => n - 1) <= 0)
+        {
+            _perAddress.TryRemove(new KeyValuePair<string, int>(client.Address, 0));
+        }
+    }
+
     public async ValueTask OnClose(IReactiveConnection connection, IWebsocketFrame frame)
     {
         if (_clients.TryRemove(connection, out var client))
         {
+            Forget(client);
+
             client.Room?.Post(client, "gone", default);
 
             // the socket is only answered once nothing else writes to it

@@ -2,7 +2,8 @@
 // Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
 // GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
 
-// The light cycle rules on the server: a line-by-line port of web/js/sim.js,
+// The light cycle rules on the server: a line-by-line port of web/js/sim.js
+// (plus an index of the walls, so rays need not try all of them),
 // which has the comments on where each number comes from in the original.
 // Change both together - the browser predicts its own cycle with the same
 // rules, so a turn happens at the same place on both sides.
@@ -116,6 +117,9 @@ public sealed class Cycle
 
     public bool Braking, Alive = true, Frozen, RubberActive;
 
+    /// <summary>How many of its finished trail segments the world's wall index holds.</summary>
+    public int Indexed;
+
     public readonly List<int> Queue = [];
 
     public readonly List<TrailPoint> Points = [];
@@ -176,6 +180,9 @@ public sealed class World
         Map = map;
         S = settings;
 
+        _cols = Math.Max(1, (int)Math.Ceiling(map.Size / CellSize));
+        _cells = new List<int>[_cols * _cols];
+
         _rim = new (double, double, double, double)[map.Rim.Length - 1];
 
         for (var i = 0; i + 1 < map.Rim.Length; i++)
@@ -203,6 +210,64 @@ public sealed class World
         return true;
     }
 
+    // -----------------------------------------------------------------------
+    // The wall index. sim.js tries every wall for every ray; with a few dozen
+    // cycles late in a round that is tens of thousands of tries a step, so
+    // the server sorts the finished trail segments into square cells and a
+    // ray only tries those in the cells it can reach. The trail segments never
+    // change once a cycle has turned away from them (points are only ever
+    // added), so each goes in once. The results are the same as trying all:
+    // on equal distances the wall the full scan would have met first wins.
+
+    private const double CellSize = 4;
+
+    private readonly int _cols;
+
+    private readonly List<int>[] _cells;
+
+    private readonly List<(Cycle C, int I, int Order)> _segments = [];
+
+    // which segments this ray has tried already (a segment sits in several cells)
+    private int[] _tried = new int[256];
+
+    private int _ray;
+
+    private void Index()
+    {
+        var cycles = Cycles;
+
+        for (var order = 0; order < cycles.Count; order++)
+        {
+            var c = cycles[order];
+            var pts = c.Points;
+
+            for (; c.Indexed < pts.Count - 1; c.Indexed++)
+            {
+                TrailPoint p = pts[c.Indexed], q = pts[c.Indexed + 1];
+
+                if (p.X == q.X && p.Y == q.Y) continue;
+
+                var id = _segments.Count;
+                _segments.Add((c, c.Indexed, order));
+
+                if (id >= _tried.Length) Array.Resize(ref _tried, _tried.Length * 2);
+
+                int cx0 = Cell(Math.Min(p.X, q.X)), cx1 = Cell(Math.Max(p.X, q.X));
+                int cy0 = Cell(Math.Min(p.Y, q.Y)), cy1 = Cell(Math.Max(p.Y, q.Y));
+
+                for (var cy = cy0; cy <= cy1; cy++)
+                {
+                    for (var cx = cx0; cx <= cx1; cx++)
+                    {
+                        (_cells[cy * _cols + cx] ??= []).Add(id);
+                    }
+                }
+            }
+        }
+    }
+
+    private int Cell(double v) => Math.Clamp((int)Math.Floor(v / CellSize), 0, _cols - 1);
+
     /// <summary>
     /// The closest dangerous wall along a ray, up to maxT. Walls laid after
     /// time do not count yet: a cycle simulated again from the past (a late
@@ -210,18 +275,16 @@ public sealed class World
     /// </summary>
     public RayHit Ray(double ox, double oy, double rx, double ry, double maxT, Cycle self, double time)
     {
-        var bestT = maxT;
-        Cycle bestOwner = null;
-        double bestWx = 0, bestWy = 0, bestWd = 0, bestWt = 0;
-        var found = false;
+        Index();
+
+        // (a wall exactly at maxT does not count: nothing wins a tie with the start)
+        var hit = new Best { T = maxT, Key = long.MinValue };
 
         foreach (var r in _rim)
         {
-            if (Intersect(ox, oy, rx, ry, r.X0, r.Y0, r.X1 - r.X0, r.Y1 - r.Y0, out var t, out _) && t >= 0 && t < bestT)
+            if (Intersect(ox, oy, rx, ry, r.X0, r.Y0, r.X1 - r.X0, r.Y1 - r.Y0, out var t, out _) && t >= 0 && t < hit.T)
             {
-                bestT = t;
-                found = true;
-                bestWx = r.X1 - r.X0; bestWy = r.Y1 - r.Y0; bestWd = 0; bestWt = -1e9;
+                hit = new Best { T = t, Key = -1, Found = true, Wx = r.X1 - r.X0, Wy = r.Y1 - r.Y0, Wt = -1e9 };
             }
         }
 
@@ -230,54 +293,102 @@ public sealed class World
         double x0 = Math.Min(ox, ox + ex) - 1e-6, x1 = Math.Max(ox, ox + ex) + 1e-6;
         double y0 = Math.Min(oy, oy + ey) - 1e-6, y1 = Math.Max(oy, oy + ey) + 1e-6;
 
-        var cycles = Cycles;
-
-        for (var ci = 0; ci < cycles.Count; ci++)
+        // the finished segments in the cells of that box
+        if (++_ray == int.MaxValue)
         {
-            var c = cycles[ci];
+            Array.Clear(_tried);
+            _ray = 1;
+        }
 
-            // a trail that went down: nothing of it is dangerous any more
-            if (!c.Alive && S.WallsStayUp >= 0 && time > c.DeathTime + S.WallsStayUp + 0.2) continue;
+        int cx0 = Cell(x0), cx1 = Cell(x1), cy0 = Cell(y0), cy1 = Cell(y1);
 
-            var pts = c.Points;
-            var n = pts.Count;
-
-            for (var i = 0; i < n; i++)
+        for (var cy = cy0; cy <= cy1; cy++)
+        {
+            for (var cx = cx0; cx <= cx1; cx++)
             {
-                if (c == self && i >= n - 2) continue;
+                var cell = _cells[cy * _cols + cx];
 
-                var p = pts[i];
-                var last = i + 1 >= n;
+                if (cell == null) continue;
 
-                double qx = last ? c.X : pts[i + 1].X, qy = last ? c.Y : pts[i + 1].Y;
+                foreach (var id in cell)
+                {
+                    if (_tried[id] == _ray) continue;
 
-                if ((p.X < x0 && qx < x0) || (p.X > x1 && qx > x1) || (p.Y < y0 && qy < y0) || (p.Y > y1 && qy > y1)) continue;
+                    _tried[id] = _ray;
 
-                var sx = qx - p.X;
-                var sy = qy - p.Y;
+                    var (c, i, order) = _segments[id];
 
-                if (sx == 0 && sy == 0) continue;
-
-                if (!Intersect(ox, oy, rx, ry, p.X, p.Y, sx, sy, out var t, out var u) || t < 0 || t >= bestT) continue;
-
-                double qd = last ? c.Dist : pts[i + 1].D, qt = last ? c.Time : pts[i + 1].T;
-
-                var wt = p.T + (qt - p.T) * u;
-
-                if (wt > time + 1e-9) continue;
-
-                var d = p.D + (qd - p.D) * u;
-
-                if (!WallDangerous(c, d, time)) continue;
-
-                bestT = t;
-                found = true;
-                bestOwner = c;
-                bestWx = sx; bestWy = sy; bestWd = d; bestWt = wt;
+                    Try(c, i, order, ox, oy, rx, ry, x0, x1, y0, y1, self, time, ref hit);
+                }
             }
         }
 
-        return found ? new RayHit { T = bestT, Owner = bestOwner, Wx = bestWx, Wy = bestWy, Wd = bestWd, Wt = bestWt } : null;
+        // and the segment each cycle is laying right now
+        var cycles = Cycles;
+
+        for (var order = 0; order < cycles.Count; order++)
+        {
+            var c = cycles[order];
+
+            Try(c, c.Points.Count - 1, order, ox, oy, rx, ry, x0, x1, y0, y1, self, time, ref hit);
+        }
+
+        return hit.Found ? new RayHit { T = hit.T, Owner = hit.Owner, Wx = hit.Wx, Wy = hit.Wy, Wd = hit.Wd, Wt = hit.Wt } : null;
+    }
+
+    private struct Best
+    {
+        public double T, Wx, Wy, Wd, Wt;
+
+        public long Key;
+
+        public Cycle Owner;
+
+        public bool Found;
+    }
+
+    /// <summary>Segment i of c's trail against the ray; kept in hit if it is the closest so far.</summary>
+    private void Try(Cycle c, int i, int order, double ox, double oy, double rx, double ry,
+                     double x0, double x1, double y0, double y1, Cycle self, double time, ref Best hit)
+    {
+        var pts = c.Points;
+        var n = pts.Count;
+
+        if (c == self && i >= n - 2) return;
+
+        // a trail that went down: nothing of it is dangerous any more
+        if (!c.Alive && S.WallsStayUp >= 0 && time > c.DeathTime + S.WallsStayUp + 0.2) return;
+
+        var p = pts[i];
+        var last = i + 1 >= n;
+
+        double qx = last ? c.X : pts[i + 1].X, qy = last ? c.Y : pts[i + 1].Y;
+
+        if ((p.X < x0 && qx < x0) || (p.X > x1 && qx > x1) || (p.Y < y0 && qy < y0) || (p.Y > y1 && qy > y1)) return;
+
+        var sx = qx - p.X;
+        var sy = qy - p.Y;
+
+        if (sx == 0 && sy == 0) return;
+
+        if (!Intersect(ox, oy, rx, ry, p.X, p.Y, sx, sy, out var t, out var u) || t < 0 || t > hit.T) return;
+
+        // the full scan tries cycles in order and each trail from its start: on a tie, the earlier one
+        var key = (long)order << 32 | (uint)i;
+
+        if (t == hit.T && key >= hit.Key) return;
+
+        double qd = last ? c.Dist : pts[i + 1].D, qt = last ? c.Time : pts[i + 1].T;
+
+        var wt = p.T + (qt - p.T) * u;
+
+        if (wt > time + 1e-9) return;
+
+        var d = p.D + (qd - p.D) * u;
+
+        if (!WallDangerous(c, d, time)) return;
+
+        hit = new Best { T = t, Key = key, Found = true, Owner = c, Wx = sx, Wy = sy, Wd = d, Wt = wt };
     }
 
     public double WallAcceleration(Cycle c, double time)

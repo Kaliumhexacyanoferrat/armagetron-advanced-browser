@@ -31,7 +31,8 @@ public record Joined(string Room, int You, bool Admin, string Token, object Sett
 
 public record Created(string Room, string Token, string T = "created");
 
-public record RoomList(RoomInfo[] Rooms, string T = "rooms");
+/// <summary>The first servers of the sorted list, and how many there are in all.</summary>
+public record RoomList(RoomInfo[] Rooms, int Total, string T = "rooms");
 
 public record RoomInfo(string Id, string Name, string Owner, int Humans, int Bots, int Max, bool Locked, int Round, string Mode, int Spectators);
 
@@ -46,6 +47,9 @@ public record Center(string Text, double Duration, string T = "center");
 public record PlayerInfo(int Id, string Name, int R, int G, int B, int Score, bool Alive, int Ping, bool Bot, bool Admin, bool Spectator, int Kills, bool Chatting);
 
 public record Players(PlayerInfo[] List, string T = "players");
+
+/// <summary>What changed since the last list: [id, score, kills, alive (0/1), chatting (0/1)] each.</summary>
+public record PlayerChanges(int[][] C, string T = "pc");
 
 public record Kicked(string Reason, string T = "kicked");
 
@@ -64,7 +68,7 @@ public record Snapshot(int Round, string Phase, double Start, double Now, object
 
 public record SettingsEvent(object Settings, string T = "settings");
 
-public record ServerList(RoomInfo[] Servers, int Online);
+public record ServerList(RoomInfo[] Servers, int Total, int Online);
 
 public record PhaseEvent(string Phase, double Next, string T = "phase");
 

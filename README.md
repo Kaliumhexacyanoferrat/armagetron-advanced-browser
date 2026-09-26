@@ -17,6 +17,9 @@ code; its textures, sounds, font, cycle models and music are included unchanged.
 - The simulation runs in fixed steps of 1/60 s on both sides: `server/Sim.cs` is a
   line-by-line port of `server/web/js/sim.js`. The browser predicts its own cycle
   and the server compensates for lag by rewinding a cycle to where a turn was made.
+- The rooms are spread over a few game loops (`Lobby.Loops`, four on the lambda;
+  about one per core on a machine of your own); the server indexes the walls
+  so the collision tests stay cheap late in a round.
 - The frequent game messages (syncs, turns, deaths, brakes) are small binary
   frames (`Wire` in `server/Protocol.cs`, read in `server/web/js/net.js`); the
   rest is JSON.
