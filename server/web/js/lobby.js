@@ -17,7 +17,7 @@ export const RULES = [
   { key: 'aiIq', label: 'AI strength', options: [[10, 'harmless'], [30, 'easy'], [50, 'normal'], [70, 'hard'], [100, 'merciless']] },
   { key: 'sizeFactor', label: 'Arena size', options: [[-5, 'tiny (88 m)'], [-4, 'small (125 m)'], [-3, 'normal (177 m)'], [-2, 'large (250 m)'], [-1, 'huge (354 m)'], [0, 'giant (500 m)']] },
   { key: 'speedFactor', label: 'Speed', options: [[-2, 'slow'], [-1, 'relaxed'], [0, 'normal'], [1, 'fast'], [2, 'very fast']] },
-  { key: 'rubber', label: 'Rubber', options: [[1, '1 (the original)'], [2, '2'], [3, '3'], [5, '5 (forgiving)'], [10, '10']] },
+  { key: 'rubber', label: 'Rubber', options: [[1, '1 (the original\'s default, hard)'], [2, '2'], [3, '3'], [5, '5 (like most servers)'], [10, '10 (forgiving)']] },
   { key: 'wallsLength', label: 'Trails', options: [[-1, 'endless'], [100, '100 m'], [200, '200 m'], [400, '400 m']] },
   { key: 'wallsStayUp', label: 'Walls of the fallen', options: [[0, 'vanish at once'], [2, 'stay 2 seconds'], [8, 'stay 8 seconds'], [-1, 'stay for the round']] },
   { key: 'scoreLimit', label: 'A match goes to', options: [[30, '30 points'], [50, '50 points'], [100, '100 points'], [200, '200 points'], [500, '500 points']] },
@@ -26,7 +26,7 @@ export const RULES = [
 
 export const DEFAULT_RULES = {
   name: '', password: '', maxPlayers: 8, minPlayers: 4, aiIq: 50, sizeFactor: -3, speedFactor: 0,
-  rubber: 1, wallsLength: -1, wallsStayUp: 8, scoreLimit: 100, roundLimit: 10,
+  rubber: 5, wallsLength: -1, wallsStayUp: 8, scoreLimit: 100, roundLimit: 10,
 };
 
 export function buildRuleFields(container, values) {
@@ -291,7 +291,10 @@ export class Lobby {
     document.getElementById('create-open').addEventListener('click', () => {
       this.app.audio.unlock();
       const name = this.prefs.name || 'Player';
-      buildRuleFields(fields, { ...DEFAULT_RULES, ...(this.prefs.lastRules ?? {}), name: `${strip(name)}'s server`, password: '' });
+      // rules saved before rubber 5 became the default still had the old 1 as a default, not a choice
+      const last = { ...(this.prefs.lastRules ?? {}) };
+      if (last.version !== 2) delete last.rubber;
+      buildRuleFields(fields, { ...DEFAULT_RULES, ...last, name: `${strip(name)}'s server`, password: '' });
       document.getElementById('create-error').textContent = '';
       dialog.returnValue = '';
       dialog.showModal();
@@ -301,7 +304,7 @@ export class Lobby {
       if (dialog.returnValue !== 'ok') return;
       const settings = readRuleFields(fields);
       const { name, password, ...rest } = settings;
-      this.prefs.lastRules = rest;
+      this.prefs.lastRules = { ...rest, version: 2 };
       this.prefs.save();
       this.app.net.send({ t: 'create', settings });
       void name; void password;

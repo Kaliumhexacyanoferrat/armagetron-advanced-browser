@@ -24,7 +24,8 @@ public sealed class RoomSettings
 
     public int ScoreLimit = 100, RoundLimit = 10;
 
-    public double Rubber = 1, WallsLength = -1, WallsStayUp = 8;
+    // CYCLE_RUBBER: the original's default is 1, but most servers played with more
+    public double Rubber = 5, WallsLength = -1, WallsStayUp = 8;
 
     public static RoomSettings From(JsonElement e, RoomSettings previous)
     {
