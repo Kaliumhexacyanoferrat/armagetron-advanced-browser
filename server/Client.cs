@@ -56,8 +56,17 @@ public sealed class Client
 
     public int R = 15, G = 15, B = 4;
 
-    /// <summary>The room this client is in, if any. Only changed by the room loop and the hub.</summary>
-    public volatile Room Room;
+    private Room _room;
+
+    /// <summary>The room this client is in, if any. Set by the hub, cleared by the room.</summary>
+    public Room Room
+    {
+        get => Volatile.Read(ref _room);
+        set => Volatile.Write(ref _room, value);
+    }
+
+    /// <summary>Out of room, unless the client already went on to another one.</summary>
+    public void LeaveRoom(Room room) => Interlocked.CompareExchange(ref _room, null, room);
 
     public bool Closed { get; private set; }
 

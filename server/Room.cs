@@ -227,12 +227,7 @@ public sealed partial class Room
     }
 
     /// <summary>The client leaves this room, unless it already went on to another one.</summary>
-    private void ClearRoom(Client client)
-    {
-#pragma warning disable CS0420 // Interlocked is a volatile access too
-        Interlocked.CompareExchange(ref client.Room, null, this);
-#pragma warning restore CS0420
-    }
+    private void ClearRoom(Client client) => client.LeaveRoom(this);
 
     /// <summary>The lobby closes this server: everybody back to the list.</summary>
     public void Shutdown(string reason)
