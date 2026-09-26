@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The light cycle rules, shared in spirit with the server (server/Sim.cs is a
 // line-by-line port of this file - change both together).
 //
@@ -35,6 +39,7 @@ export const DEFAULTS = {
   rubberSpeed: 40,      // CYCLE_RUBBER_SPEED
   rubberTime: 10,       // CYCLE_RUBBER_TIME
   rubberMinDistance: 0.005,
+  pingRubber: 3,        // CYCLE_PING_RUBBER: rubber lasts longer by (rubber + ping * this) / rubber
   wallsLength: -1,      // WALLS_LENGTH, -1 infinite
   wallsStayUp: 8,       // WALLS_STAY_UP_DELAY (dedicated server value)
   explosionRadius: 4,   // EXPLOSION_RADIUS
@@ -77,6 +82,7 @@ export class Cycle {
     this.a = 0;
     this.lastTs = 0;          // verlet: the previous step's length
     this.rubber = 0;          // rubber used, 0 .. settings.rubber
+    this.rubberEff = 1;       // how far one unit of rubber goes (more for a higher ping)
     this.brakeRes = 1;        // brake reservoir, 0 .. 1
     this.braking = false;
     this.dist = 0;
@@ -139,7 +145,10 @@ export class World {
     return true;
   }
 
-  // Cast a ray from (ox, oy) along (rx, ry) up to parameter maxT. Returns the
+  // Cast a ray from (ox, oy) along (rx, ry) up to parameter maxT. Walls laid
+  // after time do not count yet: a cycle simulated again from the past (a late
+  // turn, catching up after a correction) only meets the walls that were
+  // there then. Returns the
   // closest dangerous wall: { t, owner (a Cycle, or null for the rim),
   // wx, wy (wall direction, not normalised), wd (distance on the owner's
   // trail), wt (time it was laid) } or null. Skips cycle self's current and
@@ -147,29 +156,38 @@ export class World {
   ray(ox, oy, rx, ry, maxT, self, time) {
     let best = null, bestT = maxT;
     for (const r of this.rim) {
-      const hit = intersect(ox, oy, rx, ry, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
-      if (hit && hit[0] >= 0 && hit[0] < bestT) {
-        bestT = hit[0];
-        best = { t: hit[0], owner: null, wx: r.x1 - r.x0, wy: r.y1 - r.y0, wd: 0, wt: -1e9 };
+      if (intersect(ox, oy, rx, ry, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0) && hitT >= 0 && hitT < bestT) {
+        bestT = hitT;
+        best = { t: hitT, owner: null, wx: r.x1 - r.x0, wy: r.y1 - r.y0, wd: 0, wt: -1e9 };
       }
     }
+    // the box the ray can reach: walls outside it are skipped without the maths
+    const ex = rx * maxT, ey = ry * maxT;
+    const x0 = Math.min(ox, ox + ex) - 1e-6, x1 = Math.max(ox, ox + ex) + 1e-6;
+    const y0 = Math.min(oy, oy + ey) - 1e-6, y1 = Math.max(oy, oy + ey) + 1e-6;
+    const s = this.s;
     for (const c of this.cycles.values()) {
+      // a trail that went down: nothing of it is dangerous any more
+      if (!c.alive && s.wallsStayUp >= 0 && time > c.deathTime + s.wallsStayUp + 0.2) continue;
       const pts = c.points, n = pts.length;
       for (let i = 0; i < n; i++) {
         // skip own current (i = n-1) and previous (i = n-2) segment
         if (c === self && i >= n - 2) continue;
         const p = pts[i];
-        const q = i + 1 < n ? pts[i + 1] : c;
-        const qd = i + 1 < n ? q.d : c.dist;
-        const sx = q.x - p.x, sy = q.y - p.y;
+        const last = i + 1 >= n;
+        const qx = last ? c.x : pts[i + 1].x, qy = last ? c.y : pts[i + 1].y;
+        if ((p.x < x0 && qx < x0) || (p.x > x1 && qx > x1) || (p.y < y0 && qy < y0) || (p.y > y1 && qy > y1)) continue;
+        const sx = qx - p.x, sy = qy - p.y;
         if (sx === 0 && sy === 0) continue;
-        const hit = intersect(ox, oy, rx, ry, p.x, p.y, sx, sy);
-        if (!hit || hit[0] < 0 || hit[0] >= bestT) continue;
-        const d = p.d + (qd - p.d) * hit[1];
+        if (!intersect(ox, oy, rx, ry, p.x, p.y, sx, sy) || hitT < 0 || hitT >= bestT) continue;
+        const qt = last ? c.time : pts[i + 1].t;
+        const wt = p.t + (qt - p.t) * hitU;
+        if (wt > time + 1e-9) continue;
+        const qd = last ? c.dist : pts[i + 1].d;
+        const d = p.d + (qd - p.d) * hitU;
         if (!this.wallDangerous(c, d, time)) continue;
-        const qt = i + 1 < n ? q.t : c.time;
-        bestT = hit[0];
-        best = { t: hit[0], owner: c, wx: sx, wy: sy, wd: d, wt: p.t + (qt - p.t) * hit[1] };
+        bestT = hitT;
+        best = { t: hitT, owner: c, wx: sx, wy: sy, wd: d, wt };
       }
     }
     return best;
@@ -182,7 +200,7 @@ export class World {
     const s = this.s;
     let acc = 0;
     const dx = c.dx, dy = c.dy;
-    for (const side of [1, -1]) {
+    for (let side = 1; side >= -1; side -= 2) {
       // left of (dx, dy) is (-dy, dx)
       const rx = -dx - side * dy, ry = -dy + side * dx;
       const hit = this.ray(c.x, c.y, rx, ry, s.wallNear, c, time);
@@ -274,9 +292,9 @@ export class World {
           c.rubberActive = true;
           const rubberStep = Math.min(step, Math.max(0, space) * factor);
           const use = step - rubberStep;
-          const available = s.rubber - c.rubber;
+          const available = (s.rubber - c.rubber) * c.rubberEff;
           if (use <= available) {
-            c.rubber += use;
+            c.rubber += use / c.rubberEff;
             step = rubberStep;
           } else {
             // out of rubber: the rest of the step goes into the wall
@@ -302,13 +320,12 @@ export class World {
     for (const m of moves) {
       if (m.c === c || m.step <= 0) continue;
       const o = m.c;
-      const h = intersect(c.x, c.y, dx, dy, o.x, o.y, o.dx * m.step, o.dy * m.step);
-      if (!h || h[0] < 0 || h[0] >= at || h[1] < 0 || h[1] > 1) continue;
+      if (!intersect(c.x, c.y, dx, dy, o.x, o.y, o.dx * m.step, o.dy * m.step) || hitT < 0 || hitT >= at) continue;
       // they were there first if they reached the crossing earlier in the step
-      if (h[1] < h[0] / step) {
-        at = h[0];
+      if (hitU < hitT / step) {
+        at = hitT;
         owner = o;
-        wt = o.time + h[1] * m.dt;
+        wt = o.time + hitU * m.dt;
       }
     }
     return at <= step ? { t: at, owner, wt } : null;
@@ -321,8 +338,8 @@ export class World {
     if (hit) {
       const back = Math.max(0, hit.t - s.rubberMinDistance);
       const over = step - back;
-      if (over <= s.rubber - c.rubber) {
-        c.rubber += over;
+      if (over <= (s.rubber - c.rubber) * c.rubberEff) {
+        c.rubber += over / c.rubberEff;
         step = back;
       } else {
         const frac = step > 0 ? hit.t / step : 0;
@@ -397,13 +414,17 @@ function addHole(holes, a, b) {
 }
 
 // Ray/segment intersection: point o + t * r against segment p + u * s,
-// u in [0, 1]. Returns [t, u] or null when parallel or missed.
+// u in [0, 1]. True on a hit, with t and u in hitT and hitU (no garbage: this
+// runs thousands of times a frame).
+let hitT = 0, hitU = 0;
+
 export function intersect(ox, oy, rx, ry, px, py, sx, sy) {
   const den = rx * sy - ry * sx;
-  if (Math.abs(den) < 1e-12) return null;
+  if (Math.abs(den) < 1e-12) return false;
   const qx = px - ox, qy = py - oy;
-  const t = (qx * sy - qy * sx) / den;
   const u = (qx * ry - qy * rx) / den;
-  if (u < 0 || u > 1) return null;
-  return [t, u];
+  if (u < 0 || u > 1) return false;
+  hitT = (qx * sy - qy * sx) / den;
+  hitU = u;
+  return true;
 }

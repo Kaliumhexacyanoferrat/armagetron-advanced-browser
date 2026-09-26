@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The AI players. The characters (names and abilities) are the original's
 // config/aiplayers.cfg; the thinking follows src/tron/gAIBase.cpp in spirit
 // with fewer moving parts:
@@ -267,13 +271,22 @@ public sealed class Grid
 
     private int _mark;
 
-    public Grid(World w, double time)
+    public Grid(double size)
     {
-        Cell = Math.Max(1.0, w.Map.Size / 110);
-        _n = (int)Math.Ceiling(w.Map.Size / Cell) + 1;
+        Size = size;
+        Cell = Math.Max(1.0, size / 110);
+        _n = (int)Math.Ceiling(size / Cell) + 1;
         _blocked = new bool[_n * _n];
         _queue = new int[_n * _n];
         _seen = new int[_n * _n];
+    }
+
+    public double Size { get; }
+
+    /// <summary>Draws the walls as they are at time, over whatever was there.</summary>
+    public void Rebuild(World w, double time)
+    {
+        Array.Clear(_blocked);
 
         foreach (var c in w.Cycles)
         {
@@ -370,12 +383,21 @@ public sealed partial class Room
 
     private double _gridTime = -1;
 
-    /// <summary>One picture of the arena per step, shared by all AIs.</summary>
+    /// <summary>
+    /// One picture of the arena, shared by all AIs and redrawn at most ten
+    /// times a second (a wall grows by two metres in that time).
+    /// </summary>
     public Grid BotGrid(World w, double time)
     {
-        if (_grid == null || _gridTime != time)
+        if (_grid == null || _grid.Size != w.Map.Size)
         {
-            _grid = new Grid(w, time);
+            _grid = new Grid(w.Map.Size);
+            _gridTime = double.NegativeInfinity;
+        }
+
+        if (time < _gridTime || time - _gridTime >= 0.1)
+        {
+            _grid.Rebuild(w, time);
             _gridTime = time;
         }
 

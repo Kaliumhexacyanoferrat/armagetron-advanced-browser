@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // One game server that a player created. Everything that happens in it runs
 // on the lobby's loop, one tick at a time: messages from browsers are queued
 // by the hub (Post) and handled at the start of the next tick, so the game
@@ -113,6 +117,8 @@ public sealed class Player
 
     public int LastTurnN;
 
+    public double LastRename = -100;
+
     // spam protection (nSpamProtection)
     public double SpamLevel, SpamTime;
 
@@ -183,6 +189,17 @@ public sealed partial class Room
 
     public string OwnerName { get; }
 
+    public string OwnerAddress { get; init; } = "";
+
+    /// <summary>Taken off the lobby: nobody gets in any more.</summary>
+    public volatile bool Closed;
+
+    /// <summary>Whether anybody ever joined (a server nobody uses goes away sooner).</summary>
+    public bool EverJoined { get; private set; }
+
+    /// <summary>Ticks in a row that failed, counted by the lobby.</summary>
+    public int Failures;
+
     public string AdminToken { get; }
 
     public volatile RoomInfo Info;
@@ -192,7 +209,42 @@ public sealed partial class Room
     /// <summary>When the last human left; the lobby closes rooms that stay empty.</summary>
     public DateTime? EmptySince { get; private set; }
 
-    public void Post(Client client, string type, JsonElement message) => _inbox.Enqueue((client, type, message));
+    public void Post(Client client, string type, JsonElement message)
+    {
+        if (Closed)
+        {
+            // the lobby just closed this server
+            if (type == "join")
+            {
+                ClearRoom(client);
+                client.Send(new Refused("That server does not exist any more."));
+            }
+
+            return;
+        }
+
+        _inbox.Enqueue((client, type, message));
+    }
+
+    /// <summary>The client leaves this room, unless it already went on to another one.</summary>
+    private void ClearRoom(Client client)
+    {
+#pragma warning disable CS0420 // Interlocked is a volatile access too
+        Interlocked.CompareExchange(ref client.Room, null, this);
+#pragma warning restore CS0420
+    }
+
+    /// <summary>The lobby closes this server: everybody back to the list.</summary>
+    public void Shutdown(string reason)
+    {
+        foreach (var p in _players)
+        {
+            if (p.Client == null) continue;
+
+            ClearRoom(p.Client);
+            p.Client.Send(new Kicked(reason));
+        }
+    }
 
     private IEnumerable<Player> Humans => _players.Where(p => !p.IsBot);
 
@@ -325,7 +377,8 @@ public sealed partial class Room
                 }
             }
 
-            if (Settings.Password != "" && message.Str("password") != Settings.Password)
+            // cleaned like the password was when it was set
+            if (Settings.Password != "" && Names.Clean(message.Str("password"), "", 30) != Settings.Password)
             {
                 Refuse(client, message.Str("password") == null ? "This server is protected by a password." : "That password is not right.", "password");
                 return;
@@ -361,6 +414,7 @@ public sealed partial class Room
         _playersChanged = true;
 
         EmptySince = null;
+        EverJoined = true;
 
         client.Send(new Joined(Id, player.Id, admin, admin ? AdminToken : null, Settings.ToWire(admin), OwnerName));
 
@@ -391,7 +445,7 @@ public sealed partial class Room
 
     private void Refuse(Client client, string reason, string code)
     {
-        if (client.Room == this) client.Room = null;
+        ClearRoom(client);
 
         client.Send(new Refused(reason, code));
     }
@@ -408,9 +462,9 @@ public sealed partial class Room
             Finalize(player, c.Frozen && player.Doom != null ? player.Doom.Time : _now, -1, silent: true);
         }
 
-        if (player.Client?.Room == this)
+        if (player.Client != null)
         {
-            player.Client.Room = null;
+            ClearRoom(player.Client);
         }
 
         Broadcast(how ?? (player.Spectator
@@ -435,7 +489,11 @@ public sealed partial class Room
         {
             var old = player.Colored;
             player.Name = name;
-            Broadcast($"{old} renamed to {player.Colored}.");
+
+            // one announcement for a burst of renames, not one per letter
+            if (_now - player.LastRename > 3) Broadcast($"{old} renamed to {player.Colored}.");
+
+            player.LastRename = _now;
         }
 
         // a new colour shows from the next round on, the cycle keeps its own
@@ -473,6 +531,14 @@ public sealed partial class Room
         foreach (var p in _players)
         {
             p.Client?.Send(frame);
+        }
+    }
+
+    private void SendAll(byte[] binary)
+    {
+        foreach (var p in _players)
+        {
+            p.Client?.Send(binary, FrameType.Binary);
         }
     }
 

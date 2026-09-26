@@ -1,6 +1,12 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The front page: who you are, the servers running, and making one.
 
 import { colorize, hex15, strip } from './hud.js';
+import { navigate } from './menunav.js';
+import { randomColor } from './prefs.js';
 
 // The rules a server owner chooses, for the create form and the admin panel.
 export const RULES = [
@@ -84,10 +90,18 @@ export class Lobby {
     this.setupCreate();
     document.getElementById('quick').addEventListener('click', () => this.quickPlay());
     this.grid = new MenuGrid(document.getElementById('grid'));
+    // the arrow keys walk the page like a menu
+    window.addEventListener('keydown', (e) => {
+      if (this.el.hidden || document.querySelector('dialog[open]')) return;
+      const inside = this.el.contains(document.activeElement);
+      if (!inside && document.activeElement !== document.body) return;
+      navigate(this.el, e);
+    });
   }
 
   show() {
     this.el.hidden = false;
+    if (!document.querySelector('dialog[open]')) document.getElementById('quick').focus({ preventScroll: true });
     this.grid.start();
     this.app.net.send({ t: 'list' });
     clearInterval(this.refresh);
@@ -114,7 +128,7 @@ export class Lobby {
     name.addEventListener('input', () => {
       p.name = name.value.trim().slice(0, 15);
       p.save();
-      this.app.hello();
+      this.helloSoon();
     });
     const sliders = { r: document.getElementById('cr'), g: document.getElementById('cg'), b: document.getElementById('cb') };
     for (const [k, s] of Object.entries(sliders)) {
@@ -123,29 +137,44 @@ export class Lobby {
         p[k] = Number(s.value);
         p.save();
         this.drawSwatch();
-        this.app.hello();
+        this.helloSoon();
       });
     }
     const presets = document.getElementById('presets');
     const colors = [[15, 3, 3], [3, 15, 3], [3, 3, 15], [15, 15, 3], [15, 3, 15], [3, 15, 15], [15, 9, 3], [15, 3, 9], [9, 3, 15], [3, 9, 15], [15, 15, 15]];
+    const choose = ([r, g, b]) => {
+      Object.assign(p, { r, g, b });
+      sliders.r.value = r;
+      sliders.g.value = g;
+      sliders.b.value = b;
+      p.save();
+      this.drawSwatch();
+      this.helloSoon();
+    };
     for (const [r, g, b] of colors) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.style.background = hex15(r, g, b);
       btn.setAttribute('aria-label', `Colour ${hex15(r, g, b)}`);
-      btn.addEventListener('click', () => {
-        Object.assign(p, { r, g, b });
-        sliders.r.value = r;
-        sliders.g.value = g;
-        sliders.b.value = b;
-        p.save();
-        this.drawSwatch();
-        this.app.hello();
-      });
+      btn.addEventListener('click', () => choose([r, g, b]));
       presets.append(btn);
     }
+    const dice = document.createElement('button');
+    dice.type = 'button';
+    dice.className = 'dice';
+    dice.textContent = '?';
+    dice.title = 'A random colour';
+    dice.setAttribute('aria-label', 'A random colour');
+    dice.addEventListener('click', () => choose(randomColor()));
+    presets.append(dice);
     this.sliders = sliders;
     this.drawSwatch();
+  }
+
+  // typing a name or dragging a slider tells the server once it settles
+  helloSoon() {
+    clearTimeout(this.helloTimer);
+    this.helloTimer = setTimeout(() => this.app.hello(), 250);
   }
 
   // a little lightcycle trail in your colour
@@ -181,7 +210,17 @@ export class Lobby {
 
   setRooms(rooms) {
     this.rooms = rooms;
+    this.listed = true;
+    if (this.quickWanted) {
+      this.quickWanted = false;
+      this.quickPlay();
+    }
     const list = document.getElementById('servers');
+    // nothing changed: leave the list (and the keyboard focus in it) alone
+    const key = JSON.stringify(rooms) + Object.keys(this.prefs.tokens).join();
+    if (key === this.roomsKey) return;
+    this.roomsKey = key;
+    const focused = list.contains(document.activeElement) ? document.activeElement.closest('.server')?.dataset.id : null;
     document.getElementById('server-count').textContent = rooms.length ? `${rooms.length} running` : '';
     if (!rooms.length) {
       const empty = document.createElement('div');
@@ -193,6 +232,7 @@ export class Lobby {
     list.replaceChildren(...rooms.map((r) => {
       const row = document.createElement('div');
       row.className = 'server' + (this.prefs.token(r.id) ? ' mine' : '');
+      row.dataset.id = r.id;
       const info = document.createElement('div');
       const title = document.createElement('div');
       title.className = 'title';
@@ -220,13 +260,18 @@ export class Lobby {
       join.className = r.humans < r.max ? 'primary-outline' : '';
       join.addEventListener('click', () => this.app.join(r.id));
       row.append(info, count, join);
-      row.addEventListener('dblclick', () => this.app.join(r.id));
       return row;
     }));
+    if (focused) list.querySelector(`[data-id="${focused}"] button`)?.focus({ preventScroll: true });
   }
 
   quickPlay() {
     this.app.audio.unlock();
+    if (!this.listed) {
+      // the list is on its way: decide when it is here
+      this.quickWanted = true;
+      return;
+    }
     const open = this.rooms.filter((r) => !r.locked && r.humans < r.max).sort((a, b) => b.humans - a.humans);
     if (open.length && open[0].humans > 0) {
       this.app.join(open[0].id);
@@ -248,6 +293,7 @@ export class Lobby {
       const name = this.prefs.name || 'Player';
       buildRuleFields(fields, { ...DEFAULT_RULES, ...(this.prefs.lastRules ?? {}), name: `${strip(name)}'s server`, password: '' });
       document.getElementById('create-error').textContent = '';
+      dialog.returnValue = '';
       dialog.showModal();
       fields.querySelector('input')?.select();
     });
@@ -318,7 +364,8 @@ export class MenuGrid {
     if (!this.tile) return;
     // about sixteen tiles across; the texture matrix [[.8,.2],[-.2,.8]] and the drift (t/3, t/5)
     const tileSize = w / 16 / 0.82;
-    const pattern = ctx.createPattern(this.tile, 'repeat');
+    this.pattern ??= ctx.createPattern(this.tile, 'repeat');
+    const pattern = this.pattern;
     const k = tileSize / this.tile.width;
     const m = new DOMMatrix([0.8 * k, -0.2 * k, 0.2 * k, 0.8 * k, 0, 0])
       .translate((t / 3) * this.tile.width, (t / 5) * this.tile.height);

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+# Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+# GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 """Compiles server/*.cs on the platform without saving: tools/check.py"""
 import json, os, urllib.request
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

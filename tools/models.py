@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+# Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+# GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 """Converts the original cycle models (models/*.mod) into web/js/models.js.
 
 Follows rModel::Load's old loader: texture coordinates are the x/z extent
@@ -6,7 +10,7 @@ of the model, normals are averaged face normals (smooth shading).
 """
 import json, math, os, sys
 
-src = sys.argv[1] if len(sys.argv) > 1 else '../armagetronad/models'
+src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def load(path):
@@ -37,7 +41,10 @@ def load(path):
 
 models = {n: load(os.path.join(src, f'cycle_{n}.mod')) for n in ('body', 'front', 'rear')}
 with open(os.path.join(root, 'server', 'web', 'js', 'models.js'), 'w') as f:
-    f.write('// The original light cycle models (models/cycle_*.mod), converted by tools/models.py.\n')
+    f.write('// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.\n')
+    f.write('// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.\n')
+    f.write('// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser\n\n')
+    f.write('// The original light cycle models (models/cycle_*.mod, in tools/models), converted by tools/models.py.\n')
     f.write('// Per vertex: position xyz, normal xyz, texture uv. Triangles in i.\n')
     f.write('export const MODELS = ' + json.dumps(models, separators=(',', ':')) + ';\n')
 print('ok')

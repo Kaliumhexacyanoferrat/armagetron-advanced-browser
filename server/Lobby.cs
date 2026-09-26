@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Every server (room) that players created, and the one loop that runs them.
 // A room lives as long as people use it: when the last human leaves it stays
 // open for a while, so its owner can come back, and then it goes away.
@@ -14,6 +18,9 @@ public sealed class Lobby
     public const int Rate = 60;
 
     private static readonly TimeSpan EmptyRoomLifetime = TimeSpan.FromMinutes(15);
+
+    /// <summary>A server nobody ever joined (its maker closed the tab) goes sooner.</summary>
+    private static readonly TimeSpan UnusedRoomLifetime = TimeSpan.FromMinutes(1);
 
     private readonly object _lock = new();
 
@@ -32,6 +39,11 @@ public sealed class Lobby
 
     /// <summary>Seconds since the lobby started; the clock every room and browser agree on.</summary>
     public double Now => (DateTime.UtcNow - _epoch).TotalSeconds;
+
+    public void Log(string line) => _log(line);
+
+    /// <summary>Called once a second from the loop (the hub drops silent connections).</summary>
+    public Action EverySecond { get; set; }
 
     public RoomInfo[] List()
     {
@@ -83,6 +95,9 @@ public sealed class Lobby
                     break;
                 }
 
+                // already there (or on the way): a second click changes nothing
+                if (client.Room == room) break;
+
                 Leave(client);
 
                 client.Room = room;
@@ -121,8 +136,8 @@ public sealed class Lobby
                 return;
             }
 
-            // a browser may own a few servers, not an unlimited number of them
-            if (client.Cid != "" && _rooms.Values.Count(r => r.OwnerCid == client.Cid) >= 3)
+            // a browser (or an address) may own a few servers, not an unlimited number of them
+            if (_rooms.Values.Count(r => (client.Cid != "" && r.OwnerCid == client.Cid) || r.OwnerAddress == client.Address) >= 3)
             {
                 client.Send(new Refused("You already run three servers. Close one before you create another."));
                 return;
@@ -136,7 +151,7 @@ public sealed class Lobby
             }
             while (_rooms.ContainsKey(id));
 
-            room = new Room(this, id, settings, client.Cid, client.Name, _log);
+            room = new Room(this, id, settings, client.Cid, client.Name, _log) { OwnerAddress = client.Address };
 
             _rooms[id] = room;
         }
@@ -152,6 +167,8 @@ public sealed class Lobby
         {
             _rooms.Remove(room.Id);
         }
+
+        room.Closed = true;
     }
 
     private async Task Run()
@@ -161,48 +178,83 @@ public sealed class Lobby
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(step / 2));
 
         var simulated = Now;
+        var second = Now;
 
         while (await timer.WaitForNextTickAsync())
         {
-            var now = Now;
-
-            // falling far behind (a paused machine): skip ahead instead of racing to catch up
-            if (now - simulated > 0.5)
+            // nothing may end this loop: every server runs on it
+            try
             {
-                simulated = now - step;
-            }
+                Tick(ref simulated, step);
 
-            Room[] rooms;
-
-            lock (_lock)
-            {
-                rooms = [.. _rooms.Values];
-            }
-
-            while (simulated + step <= now)
-            {
-                simulated += step;
-
-                foreach (var room in rooms)
+                if (Now - second >= 1)
                 {
-                    try
-                    {
-                        room.Tick(simulated);
-                    }
-                    catch (Exception e)
-                    {
-                        _log($"room {room.Id} failed: {e}");
-                    }
+                    second = Now;
+                    EverySecond?.Invoke();
                 }
             }
+            catch (Exception e)
+            {
+                _log($"lobby loop failed: {e}");
+            }
+        }
+    }
+
+    private void Tick(ref double simulated, double step)
+    {
+        var now = Now;
+
+        // falling far behind (a paused machine): skip ahead instead of racing to catch up
+        if (now - simulated > 0.5)
+        {
+            simulated = now - step;
+        }
+
+        Room[] rooms;
+
+        lock (_lock)
+        {
+            rooms = [.. _rooms.Values];
+        }
+
+        while (simulated + step <= now)
+        {
+            simulated += step;
 
             foreach (var room in rooms)
             {
-                if (room.EmptySince is { } since && DateTime.UtcNow - since > EmptyRoomLifetime)
+                if (room.Closed) continue;
+
+                try
                 {
-                    _log($"server '{room.Settings.Name}' ({room.Id}) closed after being empty");
-                    Remove(room);
+                    room.Tick(simulated);
+                    room.Failures = 0;
                 }
+                catch (Exception e)
+                {
+                    // once in the log is enough; a server that keeps failing is closed
+                    if (room.Failures++ == 0) _log($"room {room.Id} failed: {e}");
+
+                    if (room.Failures > 120)
+                    {
+                        _log($"server '{room.Settings.Name}' ({room.Id}) closed after failing");
+                        room.Shutdown("This server broke down, sorry. Please join another one.");
+                        Remove(room);
+                    }
+                }
+            }
+        }
+
+        foreach (var room in rooms)
+        {
+            if (room.Closed) continue;
+
+            var empty = room.EmptySince is { } since ? DateTime.UtcNow - since : TimeSpan.Zero;
+
+            if (room.EmptySince != null && (empty > EmptyRoomLifetime || (!room.EverJoined && empty > UnusedRoomLifetime)))
+            {
+                _log($"server '{room.Settings.Name}' ({room.Id}) closed after being empty");
+                Remove(room);
             }
         }
     }

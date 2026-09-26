@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The light cycle rules on the server: a line-by-line port of web/js/sim.js,
 // which has the comments on where each number comes from in the original.
 // Change both together - the browser predicts its own cycle with the same
@@ -21,7 +25,7 @@ public sealed class SimSettings
 
     public int TurnMemory = 3;
 
-    public double Rubber = 1, RubberSpeed = 40, RubberTime = 10, RubberMinDistance = 0.005;
+    public double Rubber = 1, RubberSpeed = 40, RubberTime = 10, RubberMinDistance = 0.005, PingRubber = 3;
 
     public double WallsLength = -1, WallsStayUp = 8, ExplosionRadius = 4;
 
@@ -33,7 +37,7 @@ public sealed class SimSettings
         ["accel"] = Accel, ["accelOffset"] = AccelOffset, ["wallNear"] = WallNear, ["accelSelf"] = AccelSelf, ["accelEnemy"] = AccelEnemy, ["accelRim"] = AccelRim,
         ["brake"] = Brake, ["brakeRefill"] = BrakeRefill, ["brakeDeplete"] = BrakeDeplete,
         ["delay"] = Delay, ["turnSpeedFactor"] = TurnSpeedFactor, ["turnMemory"] = TurnMemory,
-        ["rubber"] = Rubber, ["rubberSpeed"] = RubberSpeed, ["rubberTime"] = RubberTime, ["rubberMinDistance"] = RubberMinDistance,
+        ["rubber"] = Rubber, ["rubberSpeed"] = RubberSpeed, ["rubberTime"] = RubberTime, ["rubberMinDistance"] = RubberMinDistance, ["pingRubber"] = PingRubber,
         ["wallsLength"] = WallsLength, ["wallsStayUp"] = WallsStayUp, ["explosionRadius"] = ExplosionRadius, ["sizeFactor"] = SizeFactor
     };
 }
@@ -105,6 +109,9 @@ public sealed class Cycle
 
     public double X, Y, V, A, LastTs, Rubber, BrakeRes = 1, Dist, LastTurnTime, Time, DeathTime;
 
+    /// <summary>How far one unit of rubber goes: CYCLE_PING_RUBBER gives more to a higher ping.</summary>
+    public double RubberEff = 1;
+
     public int Dir, Turns;
 
     public bool Braking, Alive = true, Frozen, RubberActive;
@@ -132,11 +139,15 @@ public sealed class Cycle
         LastTs = 0;
     }
 
-    public CycleState Save() => new()
+    public CycleState Save(CycleState into = null)
     {
-        X = X, Y = Y, Dir = Dir, V = V, A = A, LastTs = LastTs, Rubber = Rubber, BrakeRes = BrakeRes, Braking = Braking,
-        Dist = Dist, Turns = Turns, LastTurnTime = LastTurnTime, Time = Time
-    };
+        var s = into ?? new CycleState();
+
+        s.X = X; s.Y = Y; s.Dir = Dir; s.V = V; s.A = A; s.LastTs = LastTs; s.Rubber = Rubber; s.BrakeRes = BrakeRes;
+        s.Braking = Braking; s.Dist = Dist; s.Turns = Turns; s.LastTurnTime = LastTurnTime; s.Time = Time;
+
+        return s;
+    }
 
     public void Restore(CycleState s)
     {
@@ -152,7 +163,7 @@ public sealed class RayHit
     public Cycle Owner;
 }
 
-public sealed record Move(Cycle C, double Step, double Dt);
+public readonly record struct Move(Cycle C, double Step, double Dt);
 
 public sealed record Death(Cycle C, Cycle Owner);
 
@@ -192,22 +203,42 @@ public sealed class World
         return true;
     }
 
+    /// <summary>
+    /// The closest dangerous wall along a ray, up to maxT. Walls laid after
+    /// time do not count yet: a cycle simulated again from the past (a late
+    /// turn) only meets the walls that were there then.
+    /// </summary>
     public RayHit Ray(double ox, double oy, double rx, double ry, double maxT, Cycle self, double time)
     {
-        RayHit best = null;
         var bestT = maxT;
+        Cycle bestOwner = null;
+        double bestWx = 0, bestWy = 0, bestWd = 0, bestWt = 0;
+        var found = false;
 
         foreach (var r in _rim)
         {
             if (Intersect(ox, oy, rx, ry, r.X0, r.Y0, r.X1 - r.X0, r.Y1 - r.Y0, out var t, out _) && t >= 0 && t < bestT)
             {
                 bestT = t;
-                best = new RayHit { T = t, Owner = null, Wx = r.X1 - r.X0, Wy = r.Y1 - r.Y0, Wd = 0, Wt = -1e9 };
+                found = true;
+                bestWx = r.X1 - r.X0; bestWy = r.Y1 - r.Y0; bestWd = 0; bestWt = -1e9;
             }
         }
 
-        foreach (var c in Cycles)
+        // the box the ray can reach: walls outside it are skipped without the maths
+        double ex = rx * maxT, ey = ry * maxT;
+        double x0 = Math.Min(ox, ox + ex) - 1e-6, x1 = Math.Max(ox, ox + ex) + 1e-6;
+        double y0 = Math.Min(oy, oy + ey) - 1e-6, y1 = Math.Max(oy, oy + ey) + 1e-6;
+
+        var cycles = Cycles;
+
+        for (var ci = 0; ci < cycles.Count; ci++)
         {
+            var c = cycles[ci];
+
+            // a trail that went down: nothing of it is dangerous any more
+            if (!c.Alive && S.WallsStayUp >= 0 && time > c.DeathTime + S.WallsStayUp + 0.2) continue;
+
             var pts = c.Points;
             var n = pts.Count;
 
@@ -216,17 +247,11 @@ public sealed class World
                 if (c == self && i >= n - 2) continue;
 
                 var p = pts[i];
-                double qx, qy, qd, qt;
+                var last = i + 1 >= n;
 
-                if (i + 1 < n)
-                {
-                    var q = pts[i + 1];
-                    qx = q.X; qy = q.Y; qd = q.D; qt = q.T;
-                }
-                else
-                {
-                    qx = c.X; qy = c.Y; qd = c.Dist; qt = c.Time;
-                }
+                double qx = last ? c.X : pts[i + 1].X, qy = last ? c.Y : pts[i + 1].Y;
+
+                if ((p.X < x0 && qx < x0) || (p.X > x1 && qx > x1) || (p.Y < y0 && qy < y0) || (p.Y > y1 && qy > y1)) continue;
 
                 var sx = qx - p.X;
                 var sy = qy - p.Y;
@@ -235,16 +260,24 @@ public sealed class World
 
                 if (!Intersect(ox, oy, rx, ry, p.X, p.Y, sx, sy, out var t, out var u) || t < 0 || t >= bestT) continue;
 
+                double qd = last ? c.Dist : pts[i + 1].D, qt = last ? c.Time : pts[i + 1].T;
+
+                var wt = p.T + (qt - p.T) * u;
+
+                if (wt > time + 1e-9) continue;
+
                 var d = p.D + (qd - p.D) * u;
 
                 if (!WallDangerous(c, d, time)) continue;
 
                 bestT = t;
-                best = new RayHit { T = t, Owner = c, Wx = sx, Wy = sy, Wd = d, Wt = p.T + (qt - p.T) * u };
+                found = true;
+                bestOwner = c;
+                bestWx = sx; bestWy = sy; bestWd = d; bestWt = wt;
             }
         }
 
-        return best;
+        return found ? new RayHit { T = bestT, Owner = bestOwner, Wx = bestWx, Wy = bestWy, Wd = bestWd, Wt = bestWt } : null;
     }
 
     public double WallAcceleration(Cycle c, double time)
@@ -252,7 +285,7 @@ public sealed class World
         double acc = 0;
         int dx = c.Dx, dy = c.Dy;
 
-        foreach (var side in (ReadOnlySpan<int>)[1, -1])
+        for (var side = 1; side >= -1; side -= 2)
         {
             double rx = -dx - side * dy, ry = -dy + side * dx;
 
@@ -379,11 +412,11 @@ public sealed class World
 
                     var rubberStep = Math.Min(step, Math.Max(0, space) * factor);
                     var use = step - rubberStep;
-                    var available = S.Rubber - c.Rubber;
+                    var available = (S.Rubber - c.Rubber) * c.RubberEff;
 
                     if (use <= available)
                     {
-                        c.Rubber += use;
+                        c.Rubber += use / c.RubberEff;
                         step = rubberStep;
                     }
                     else
@@ -410,8 +443,10 @@ public sealed class World
         var owner = hit?.Owner;
         var wt = hit?.Wt ?? 0;
 
-        foreach (var m in moves)
+        for (var mi = 0; mi < moves.Count; mi++)
         {
+            var m = moves[mi];
+
             if (m.C == c || m.Step <= 0) continue;
 
             var o = m.C;
@@ -437,9 +472,9 @@ public sealed class World
             var back = Math.Max(0, hit.T - S.RubberMinDistance);
             var over = step - back;
 
-            if (over <= S.Rubber - c.Rubber)
+            if (over <= (S.Rubber - c.Rubber) * c.RubberEff)
             {
-                c.Rubber += over;
+                c.Rubber += over / c.RubberEff;
                 step = back;
             }
             else
@@ -470,29 +505,42 @@ public sealed class World
         c.Time += dt;
     }
 
-    public List<Death> Step(IEnumerable<Cycle> cycles, double dt, Action<Cycle, int> onTurn)
-    {
-        var moves = new List<Move>();
+    // scratch space for Step: it runs 60 times a second, and allocates nothing
+    private readonly List<Move> _moves = [];
 
-        foreach (var c in cycles)
+    private readonly List<RayHit> _hits = [];
+
+    private readonly List<Death> _deaths = [];
+
+    /// <returns>who died; the list is reused by the next step</returns>
+    public List<Death> Step(List<Cycle> cycles, double dt, Action<Cycle, int> onTurn)
+    {
+        _moves.Clear();
+        _hits.Clear();
+        _deaths.Clear();
+
+        for (var i = 0; i < cycles.Count; i++)
         {
+            var c = cycles[i];
+
             if (!c.Alive || c.Frozen) continue;
 
-            moves.Add(new Move(c, Prepare(c, dt, onTurn), dt));
+            _moves.Add(new Move(c, Prepare(c, dt, onTurn), dt));
         }
 
-        var hits = moves.Select(m => Collide(m.C, m.Step, moves)).ToArray();
-
-        var deaths = new List<Death>();
-
-        for (var i = 0; i < moves.Count; i++)
+        for (var i = 0; i < _moves.Count; i++)
         {
-            var r = Advance(moves[i].C, moves[i].Step, dt, hits[i]);
-
-            if (r != null) deaths.Add(r);
+            _hits.Add(Collide(_moves[i].C, _moves[i].Step, _moves));
         }
 
-        return deaths;
+        for (var i = 0; i < _moves.Count; i++)
+        {
+            var r = Advance(_moves[i].C, _moves[i].Step, dt, _hits[i]);
+
+            if (r != null) _deaths.Add(r);
+        }
+
+        return _deaths;
     }
 
     public void Explode(double x, double y, double radius)

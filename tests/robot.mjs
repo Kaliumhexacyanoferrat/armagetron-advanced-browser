@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // A headless player for finding deaths the browser did not see coming:
 //   node tests/robot.mjs [ws://localhost:8080/play] [latency ms] [seconds]
 //
@@ -25,6 +29,7 @@ class LaggySocket extends EventTarget {
     super();
     this.readyState = 0;
     this.ws = new Socket(address);
+    this.ws.binaryType = 'arraybuffer';
     this.ws.addEventListener('open', () => { this.readyState = 1; this.dispatchEvent(new Event('open')); });
     this.ws.addEventListener('close', () => { this.readyState = 3; this.dispatchEvent(new Event('close')); });
     this.ws.addEventListener('message', (e) => {
@@ -32,6 +37,9 @@ class LaggySocket extends EventTarget {
       setTimeout(() => this.dispatchEvent(Object.assign(new Event('message'), { data })), lag());
     });
   }
+
+  // the frames come as ArrayBuffers whatever the page asks for
+  set binaryType(_) {}
 
   send(data) { setTimeout(() => this.ws.send(data), lag()); }
   close() { this.ws.close(); }
@@ -49,24 +57,25 @@ const log = (...a) => console.log(((performance.now() - t0) / 1000).toFixed(2).p
 const net = new Net();
 const once = (type) => new Promise((resolve) => { const off = net.on(type, (m) => { off(); resolve(m); }); });
 
+// listening before joining: the round's snapshot follows the welcome at once
+const game = new Game(net);
+net.on('joined', (m) => { game.you = m.you; });
+net.on('state', (m) => game.load(m));
+
 net.connect();
 await once('open');
 net.send({ t: 'hello', name: 'Robot', r: 15, g: 15, b: 3, cid: `robot${Math.floor(Math.random() * 1e9)}` });
 net.send({ t: 'create', settings: { name: 'Robot test', minPlayers: 4, aiIq: 100 } });
 const created = await once('created');
 net.send({ t: 'join', room: created.room, token: created.token });
-const joined = await once('joined');
+await once('joined');
 
-const game = new Game(net);
-game.you = joined.you;
-
-net.on('state', (m) => game.load(m));
 net.on('sync', (m) => game.onSync(m));
 net.on('turn', (m) => game.onTurn(m));
 net.on('brake', (m) => game.onBrake(m));
 net.on('die', (m) => game.onDie(m));
 
-let deaths = 0, unexpected = 0, rounds = 0, round = -1, lastTurn = 0, last = null;
+let deaths = 0, unexpected = 0, rounds = 0, round = -1, lastTurn = 0, last = null, driven = 0, turns = 0;
 
 game.on('die', (c, killer) => {
   if (c.id !== game.you) return;
@@ -93,8 +102,9 @@ const timer = setInterval(() => {
   game.update(serverNow);
 
   if (game.round !== round) {
+    driven += last?.dist ?? 0;
     round = game.round;
-    rounds++;
+    if (round > 0) rounds++;
     last = null;
     lastTurn = 0;
   }
@@ -112,6 +122,7 @@ const timer = setInterval(() => {
   // a wall ahead: turn late, like somebody grinding close
   if (ahead < 0.6 + c.speed() * 0.03) {
     lastTurn = c.time;
+    turns++;
     game.turn(left > right ? 1 : -1);
     return;
   }
@@ -134,7 +145,7 @@ const timer = setInterval(() => {
 
 setTimeout(() => {
   clearInterval(timer);
-  log(`${rounds} rounds, ${deaths} deaths, ${unexpected} unexpected`);
+  log(`${rounds} rounds, ${deaths} deaths, ${unexpected} unexpected; drove ${Math.round(driven + (last?.dist ?? 0))} m, ${turns} turns away from walls`);
   net.wanted = false;
   net.socket?.close();
   process.exit(0);

@@ -1,12 +1,21 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Talks to a running server like a browser would: node tests/ws.test.mjs [ws://localhost:8080/play]
 const url = process.argv[2] ?? 'ws://localhost:8080/play';
 
+// net.js reads the binary frames; it wants a location to build its address from
+globalThis.location = new URL(url.replace(/^ws/, 'http').replace(/play$/, ''));
+const { decode } = await import('../server/web/js/net.js');
+
 function client(name) {
   const ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
   const inbox = [];
   const waiters = [];
   ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
+    const m = typeof e.data === 'string' ? JSON.parse(e.data) : decode(e.data);
     inbox.push(m);
     for (const w of [...waiters]) if (w.test(m)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(m); }
   };

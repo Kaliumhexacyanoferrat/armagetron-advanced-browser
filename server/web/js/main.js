@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The application: the front page or a game, the socket, the frame loop,
 // keys and menus.
 
@@ -5,10 +9,11 @@ import { Net } from './net.js';
 import { Game } from './game.js';
 import { Renderer } from './render.js';
 import { Camera, MODES, MODE_NAMES } from './camera.js';
-import { Hud, strip } from './hud.js';
+import { Hud, strip, paint, hex15 } from './hud.js';
 import { Audio } from './audio.js';
 import { Prefs, ACTIONS, DEFAULT_KEYS, keyName } from './prefs.js';
 import { Lobby, buildRuleFields, readRuleFields } from './lobby.js';
+import { navigate } from './menunav.js';
 
 class App {
   constructor() {
@@ -29,11 +34,31 @@ class App {
     this.countdown = null;
     this.fps = 60;
 
+    // Cancel and Close buttons are no submit buttons, so Enter in a field presses the main one
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('[data-close]')) e.target.closest('dialog')?.close('cancel');
+    });
+    // every dialog works with the arrow keys
+    for (const dialog of document.querySelectorAll('dialog')) {
+      dialog.addEventListener('keydown', (e) => {
+        if (!this.binding) navigate(dialog, e);
+      });
+    }
+
     this.wire();
     this.setupInput();
     this.setupMenu();
     this.setupSettings();
     this.setupAdmin();
+
+    // browsers start sound (and the title music) only after a click or a key
+    const first = () => {
+      this.audio.unlock();
+      window.removeEventListener('pointerdown', first, true);
+      window.removeEventListener('keydown', first, true);
+    };
+    window.addEventListener('pointerdown', first, true);
+    window.addEventListener('keydown', first, true);
 
     this.net.connect();
     this.lobby.show();
@@ -58,6 +83,8 @@ class App {
         // back after losing the connection: into the same server again
         this.hud.status('');
         this.join(this.room, this.password);
+      } else if (this.pending) {
+        this.join(this.pending, this.password);
       } else {
         const wanted = location.hash.match(/^#\/?([a-z0-9]{4,12})$/);
         if (wanted) this.join(wanted[1]);
@@ -67,7 +94,7 @@ class App {
 
     net.on('close', () => {
       this.lobby.online(null);
-      if (this.room) this.hud.status('Connection lost. Reconnecting...');
+      if (this.room) this.hud.status(`Connection lost. Reconnecting${this.net.retry > 1 ? ` (attempt ${this.net.retry})` : ''}...`);
     });
 
     net.on('rooms', (m) => this.lobby.setRooms(m.rooms));
@@ -106,7 +133,11 @@ class App {
     net.on('msg', (m) => this.hud.message(m.text));
     net.on('center', (m) => this.hud.showCenter(m.text, m.duration));
     net.on('phase', (m) => {
-      if (m.phase === 'over') this.hud.showScores(true);
+      if (this.game) this.game.phase = m.phase;
+      if (m.phase === 'over') {
+        this.hud.showScores(true);
+        this.hud.renderScores(this.players, this.you);
+      }
     });
 
     net.on('players', (m) => {
@@ -196,17 +227,39 @@ class App {
     this.gameEl.hidden = false;
     document.getElementById('menu-title').textContent = strip(m.settings.name);
     document.getElementById('menu-admin-item').hidden = !m.admin;
-    this.renderer ??= new Renderer(document.getElementById('view'));
+    try {
+      if (!this.renderer) {
+        const view = document.getElementById('view');
+        this.renderer = new Renderer(view);
+        // the graphics driver may take the context away (a reset, too many tabs): build again when it is back
+        view.addEventListener('webglcontextlost', (e) => e.preventDefault());
+        view.addEventListener('webglcontextrestored', () => {
+          this.renderer = new Renderer(view);
+          this.renderer.scale = this.prefs.quality;
+        });
+      }
+    } catch (e) {
+      this.leave();
+      this.notice('No 3D graphics', `This browser cannot show the game: ${e.message} Try another browser, or turn on hardware acceleration.`);
+      return;
+    }
     this.renderer.scale = this.prefs.quality;
     this.audio.playMusic('game');
-    this.last = performance.now();
-    this.running = true;
-    requestAnimationFrame((t) => this.frame(t));
+    if (!this.running) {
+      // a reconnect enters again: one frame loop is enough
+      this.running = true;
+      this.last = performance.now();
+      requestAnimationFrame((t) => this.frame(t));
+    }
   }
 
   showLobby() {
     this.running = false;
     this.game = null;
+    this.players = [];
+    this.chatting = new Set();
+    this.spectateWish = undefined;
+    this.closeChat(false);
     this.gameEl.hidden = true;
     this.closeMenu();
     this.audio.silence();
@@ -230,8 +283,10 @@ class App {
     this.spawnDir = null;
     const own = this.game.own;
     if (own) this.spawnDir = [own.dx, own.dy];
+    this.renderer?.reset();
     if (m.phase === 'countdown') {
-      this.countdown = { start: m.start, said: new Set() };
+      // somebody joining during the countdown sends the round again: do not count twice
+      if (this.countdown?.start !== m.start) this.countdown = { start: m.start, said: new Set() };
       this.hud.showScores(false);
     } else {
       this.countdown = null;
@@ -310,7 +365,9 @@ class App {
       chatting: this.chatting,
     };
     this.renderer.draw(scene, this.camera, serverNow, dt);
-    game.explosions = game.explosions.filter((e) => serverNow - e.time < 4);
+    if (game.explosions.length && serverNow - game.explosions[0].time >= 4) {
+      game.explosions = game.explosions.filter((e) => serverNow - e.time < 4);
+    }
 
     // the cockpit shows the watched cycle
     const alive = game.world ? [...game.world.cycles.values()].filter((c) => c.alive) : [];
@@ -337,7 +394,7 @@ class App {
       spawnDir: this.spawnDir,
       cameraDir: this.camera.dir,
       chatting: false,
-      song: this.audio.music ? decodeURIComponent(this.audio.music.src.split('/').pop().replace('.ogg', '')) : '',
+      song: this.audio.song,
     });
     this.hud.nameTags(game, this.renderer, performance.now(), focusCycle?.id ?? this.you);
     this.audio.speedMultiplier = Math.pow(2, (this.settings?.speedFactor ?? 0) / 2);
@@ -357,7 +414,7 @@ class App {
         ? (w ? `Watching ${w}. ← → to switch, B to play.` : 'You are watching. Press B to play.')
         : (w ? `Watching ${w}. You join the next round.` : 'You join the next round.'));
     } else if (own && !own.alive && focusCycle) {
-      this.hud.status(`Watching ${strip(game.names.get(focusCycle.id)?.name ?? '')}`);
+      this.hud.status(`Watching ${strip(game.names.get(focusCycle.id)?.name ?? '')}. ← → to switch.`);
     } else {
       this.hud.status('');
     }
@@ -421,6 +478,8 @@ class App {
     window.addEventListener('keydown', (e) => {
       if (this.binding) return;
       if (!this.room || this.gameEl.hidden) return;
+      // a dialog handles its own keys (Escape closes it)
+      if (document.querySelector('dialog[open]')) return;
       if (e.code === 'Escape') {
         if (!this.chatEl().hidden) this.closeChat();
         else this.toggleMenu();
@@ -452,6 +511,7 @@ class App {
 
     window.addEventListener('blur', () => {
       held.clear();
+      for (const k of Object.keys(this.freeInput)) this.freeInput[k] = false;
       this.game?.brake(false);
       this.camera.setGlance(null);
     });
@@ -475,12 +535,19 @@ class App {
         e.preventDefault();
         this.audio.unlock();
         const a = b.dataset.touch;
-        if (a === 'brake') this.act('brake', true);
-        else this.act(a, true);
+        if (a === 'brake') {
+          // the release counts wherever the finger lifts
+          b.setPointerCapture(e.pointerId);
+          this.act('brake', true);
+        } else {
+          this.act(a, true);
+        }
       });
-      touch.addEventListener('pointerup', (e) => {
-        if (e.target.closest('button')?.dataset.touch === 'brake') this.act('brake', false);
-      });
+      const release = (e) => {
+        if (e.target.closest?.('button')?.dataset.touch === 'brake') this.act('brake', false);
+      };
+      touch.addEventListener('pointerup', release);
+      touch.addEventListener('pointercancel', release);
       this.gameEl.addEventListener('dblclick', () => this.toggleMenu());
     }
 
@@ -507,7 +574,7 @@ class App {
       case 'left':
       case 'right':
         if (!down) return;
-        if (riding || (own && game.phase === 'countdown')) game.turn(action === 'left' ? 1 : -1);
+        if (riding) game.turn(action === 'left' ? 1 : -1);
         else if (this.camera.mode !== 'free') this.watchNext(action === 'left' ? -1 : 1);
         return;
       case 'brake':
@@ -525,6 +592,8 @@ class App {
       case 'view':
         if (!down) return;
         this.camera.next();
+        this.prefs.camera = this.camera.mode;
+        this.prefs.save();
         this.hud.message(`0xffff7f${MODE_NAMES[this.camera.mode]}`);
         this.updateMenu();
         return;
@@ -538,7 +607,7 @@ class App {
         }
         return;
       case 'spectate':
-        if (down) this.net.send({ t: 'spectate', on: !this.isSpectatorWish() });
+        if (down) this.toggleSpectate();
         return;
       case 'map':
         if (down) this.hud.mapMode++;
@@ -551,6 +620,15 @@ class App {
         this.hud.message(this.prefs.mute ? 'Sound off.' : 'Sound on.');
         return;
     }
+  }
+
+  toggleSpectate() {
+    const wish = !this.isSpectatorWish();
+    this.spectateWish = wish;
+    this.spectateRound = this.game?.round;
+    this.net.send({ t: 'spectate', on: wish });
+    this.hud.message(wish ? 'You watch from the next round on.' : 'You play again from the next round on.');
+    this.updateMenu();
   }
 
   isSpectatorWish() {
@@ -596,6 +674,7 @@ class App {
       invite: 'Copy the link to this server; whoever opens it joins you here.',
       settings: 'Keys, sound and display.',
       admin: 'Your server: its rules, and kicking or banning players.',
+      about: 'Who made the game, its license, and where its source code is.',
       leave: 'Back to the list of servers.',
     };
     menu.addEventListener('click', (e) => {
@@ -606,23 +685,12 @@ class App {
         case 'resume':
           this.closeMenu();
           break;
-        case 'camera': {
-          const i = MODES.indexOf(this.camera.mode);
-          const next = MODES[(i + 1) % MODES.length];
-          this.camera.setMode(next);
-          this.prefs.camera = next;
-          this.prefs.save();
-          this.updateMenu();
+        case 'camera':
+          this.cycleCamera(1);
           break;
-        }
-        case 'spectate': {
-          const wish = !this.isSpectatorWish();
-          this.spectateWish = wish;
-          this.spectateRound = this.game?.round;
-          this.net.send({ t: 'spectate', on: wish });
-          this.updateMenu();
+        case 'spectate':
+          this.toggleSpectate();
           break;
-        }
         case 'invite':
           this.invite();
           break;
@@ -632,19 +700,42 @@ class App {
         case 'admin':
           this.openAdmin();
           break;
+        case 'about':
+          document.getElementById('about').showModal();
+          break;
         case 'leave':
           this.leave();
           break;
       }
     });
+    menu.addEventListener('keydown', (e) => {
+      navigate(menu, e, {
+        onLeftRight: (el, d) => {
+          if (el.dataset.menu === 'camera') this.cycleCamera(d);
+          else if (el.dataset.menu === 'spectate') this.toggleSpectate();
+          else return false;
+          return true;
+        },
+      });
+    });
+    // one highlight, like the original: the mouse moves it too
     menu.addEventListener('mouseover', (e) => {
       const b = e.target.closest('button[data-menu]');
-      if (b) document.getElementById('menu-help').textContent = help[b.dataset.menu] ?? '';
+      if (b && document.activeElement !== b) b.focus({ preventScroll: true });
     });
     menu.addEventListener('focusin', (e) => {
       const b = e.target.closest('button[data-menu]');
       if (b) document.getElementById('menu-help').textContent = help[b.dataset.menu] ?? '';
     });
+  }
+
+  cycleCamera(d) {
+    const i = MODES.indexOf(this.camera.mode);
+    const next = MODES[(i + d + MODES.length) % MODES.length];
+    this.camera.setMode(next);
+    this.prefs.camera = next;
+    this.prefs.save();
+    this.updateMenu();
   }
 
   toggleMenu() {
@@ -724,7 +815,7 @@ class App {
       p.save();
       this.renderBindings();
     });
-    dialog.addEventListener('close', () => { this.binding = null; });
+    dialog.addEventListener('close', () => this.stopListening?.());
   }
 
   openSettings() {
@@ -736,8 +827,10 @@ class App {
 
   renderBindings() {
     const table = document.getElementById('bindings');
+    const focused = table.contains(document.activeElement) ? document.activeElement.dataset : null;
+    const at = focused ? { row: focused.row, col: focused.col } : null;
     table.replaceChildren();
-    for (const [action, label] of Object.entries(ACTIONS)) {
+    Object.entries(ACTIONS).forEach(([action, label], row) => {
       const tr = table.insertRow();
       tr.insertCell().textContent = label;
       const keys = this.prefs.keys[action] ?? [];
@@ -746,18 +839,24 @@ class App {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = keyName(keys[i]) || '—';
+        b.dataset.row = row;
+        b.dataset.col = i;
         b.addEventListener('click', () => this.listen(action, i, b));
         td.append(b);
       }
-    }
+    });
+    // the keyboard stays where it was
+    if (at) table.querySelector(`[data-row="${at.row}"][data-col="${at.col}"]`)?.focus();
   }
 
   listen(action, index, button) {
+    this.stopListening?.();
     button.classList.add('listening');
     button.textContent = 'press a key';
     const handler = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      this.stopListening = null;
       window.removeEventListener('keydown', handler, true);
       this.binding = null;
       const keys = [...(this.prefs.keys[action] ?? [])];
@@ -782,6 +881,12 @@ class App {
     };
     this.binding = action;
     window.addEventListener('keydown', handler, true);
+    this.stopListening = () => {
+      this.stopListening = null;
+      window.removeEventListener('keydown', handler, true);
+      this.binding = null;
+      this.renderBindings();
+    };
   }
 
   // -------------------------------------------------------------------
@@ -831,7 +936,7 @@ class App {
       const tr = table.insertRow();
       const name = tr.insertCell();
       name.textContent = strip(p.name);
-      name.style.color = `rgb(${p.r * 17},${p.g * 17},${p.b * 17})`;
+      paint(name, hex15(p.r, p.g, p.b));
       tr.insertCell().textContent = p.bot ? 'AI' : p.spectator ? 'watching' : `${p.ping} ms`;
       const actions = tr.insertCell();
       if (p.id === this.you || p.bot) continue;
@@ -847,7 +952,9 @@ class App {
         this.banTarget = p.id;
         document.getElementById('ban-title').textContent = `Ban ${strip(p.name)}`;
         document.getElementById('ban-reason').value = '';
-        document.getElementById('ban').showModal();
+        const dialog = document.getElementById('ban');
+        dialog.returnValue = '';
+        dialog.showModal();
       });
       const kill = document.createElement('button');
       kill.type = 'button';

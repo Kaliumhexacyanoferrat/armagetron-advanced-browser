@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The heads-up display: the original's standard cockpit (resource/proto/
 // Anonymous/original/original.cockpit.xml) drawn on a 2D canvas over the
 // game, and the console, centre messages, score table, chat line and name
@@ -6,7 +10,7 @@
 // Cockpit coordinates are the original's: x from -1 (left) to 1 (right), y
 // from -1 (bottom) to 0.5 (top), so a y unit is two thirds of the height.
 
-import { trailColor } from './render.js';
+import { trailOf } from './render.js';
 
 export function colorize(text, base = null) {
   // 0xRRGGBB switches colour, 0xRESETT goes back to the default
@@ -17,7 +21,7 @@ export function colorize(text, base = null) {
     if (!s) return;
     const span = document.createElement('span');
     span.textContent = s;
-    if (color) span.style.color = color;
+    if (color) paint(span, color);
     out.append(span);
   };
   while ((m = re.exec(text))) {
@@ -27,6 +31,19 @@ export function colorize(text, base = null) {
   }
   push(text.slice(last));
   return out;
+}
+
+// tColor::IsDark with FONT_MIN_R/G/B .5 and FONT_MIN_TOTAL .7: text that dark
+// gets a bright background, so a black name stays readable
+export function isDark(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  const r = (v >> 16) / 255, g = ((v >> 8) & 255) / 255, b = (v & 255) / 255;
+  return (r < 0.5 && g < 0.5 && b < 0.5) || r + g + b < 0.7;
+}
+
+export function paint(el, hex) {
+  el.style.color = hex;
+  el.classList.toggle('dark-text', isDark(hex));
 }
 
 export function strip(text) {
@@ -137,7 +154,10 @@ export class Hud {
   }
 
   status(text) {
-    this.statusEl.textContent = text ?? '';
+    text ??= '';
+    if (text === this.statusText) return;
+    this.statusText = text;
+    this.statusEl.textContent = text;
     this.statusEl.hidden = !text;
   }
 
@@ -200,7 +220,7 @@ export class Hud {
         const d = game.display(c);
         const p = renderer.project(d.x - c.dx * 0.35, d.y - c.dy * 0.35, 1.0);
         let tag = this.tags.get(c.id);
-        if (!p || p.x < -50 || p.y < -50 || p.x > renderer.canvas.clientWidth + 50 || p.y > renderer.canvas.clientHeight + 50) {
+        if (!p || p.x < -50 || p.y < -50 || p.x > renderer.cssW + 50 || p.y > renderer.cssH + 50) {
           if (tag) tag.since = null;
           continue;
         }
@@ -217,7 +237,7 @@ export class Hud {
         const age = (now - tag.since) / 1000;
         const alpha = this.prefs.names === 'always' ? 0.75 : 0.75 * Math.max(0, Math.min(1, 5 - age));
         tag.el.style.opacity = alpha;
-        tag.el.style.transform = `translate(${p.x}px, ${p.y - renderer.canvas.clientHeight * 0.0333}px) translate(-50%, -100%)`;
+        tag.el.style.transform = `translate(${p.x}px, ${p.y - renderer.cssH * 0.0333}px) translate(-50%, -100%)`;
       }
     }
     for (const [id, tag] of this.tags) {
@@ -245,7 +265,8 @@ export class Hud {
     this.tickCenter(now);
 
     const cv = this.canvas;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // the cockpit is lines and text: a sharp picture needs no more than 1.5 pixels a point
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * Math.max(0.75, this.prefs.quality ?? 1);
     const W = cv.clientWidth, H = cv.clientHeight;
     if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
       cv.width = Math.round(W * dpr);
@@ -501,9 +522,13 @@ export class Hud {
     rim.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
     ctx.closePath();
     if (this.mapPattern) {
-      const pat = ctx.createPattern(this.mapPattern, 'repeat');
-      pat.setTransform(new DOMMatrix().scale(0.075 * size / 256 * 4));
-      ctx.fillStyle = pat;
+      // one pattern, made again only for another arena size
+      if (this.mapFill?.size !== size) {
+        const pat = ctx.createPattern(this.mapPattern, 'repeat');
+        pat.setTransform(new DOMMatrix().scale(0.075 * size / 256 * 4));
+        this.mapFill = { size, pat };
+      }
+      ctx.fillStyle = this.mapFill.pat;
     } else {
       ctx.fillStyle = '#132';
     }
@@ -517,7 +542,7 @@ export class Hud {
 
     const t = state.time;
     for (const c of game.world.cycles.values()) {
-      const col = trailColor(game.names.get(c.id)?.color ?? [1, 1, 1]);
+      const col = trailOf(game.names.get(c.id));
       if (!c.alive && t - c.deathTime > game.settings.wallsStayUp + 0.7 && game.settings.wallsStayUp >= 0) continue;
       ctx.strokeStyle = rgb(col);
       ctx.lineWidth = 1.5 / scale;

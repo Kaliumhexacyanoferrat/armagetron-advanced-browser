@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Rounds, the simulation and lag compensation of a room.
 //
 // A round: everybody spawns, four seconds of countdown (PREPARE_TIME 4), then
@@ -18,7 +22,11 @@ public sealed partial class Room
 
     private const double Prepare = 4, AfterRound = 5, AfterMatch = 6, MaxRewind = 0.5;
 
-    private const int HistoryLength = 45, SyncEvery = 6;
+    private const int HistoryLength = 45, MaxPending = 8;
+
+    // CYCLE_SYNC_INTERVAL_SELF .1 and _ENEMY 1 in spirit: everybody hears about
+    // their own cycle ten times a second, about all the others three times
+    private const int SyncSelfEvery = 6, SyncAllEvery = 18;
 
     private Phase _phase = Phase.Idle;
 
@@ -68,6 +76,7 @@ public sealed partial class Room
                 {
                     // only spectators: show them an empty arena
                     _world = new World(GameMap.Square(Settings.SizeFactor), _sim = Settings.Sim());
+                    Send(Snapshot());
                 }
                 return;
 
@@ -97,9 +106,10 @@ public sealed partial class Room
             Simulate(now);
         }
 
-        if (++_tick % SyncEvery == 0)
+        // (before the start the cycles stand still: nothing to tell)
+        if (++_tick % SyncSelfEvery == 0 && _phase is Phase.Playing or Phase.RoundOver && now > _start + Dt / 2)
         {
-            SendSync(now);
+            SendSync(now, _tick % SyncAllEvery == 0);
         }
 
         if (_phase == Phase.Playing)
@@ -206,11 +216,28 @@ public sealed partial class Room
             y += (-dy * 2.202896 + side * dx * 2.75362) * away * m;
         }
 
-        var cycle = new Cycle(p.Id, x, y, s.Dir, _start, _sim);
+        var cycle = new Cycle(p.Id, x, y, s.Dir, _start, _sim)
+        {
+            RubberEff = RubberEffectiveness(p)
+        };
 
         p.Cycle = cycle;
         p.LastTurnN = 0;
         _world.Cycles.Add(cycle);
+    }
+
+    /// <summary>
+    /// sg_RubberValues: rubber goes further for a higher ping, (rubber + ping *
+    /// CYCLE_PING_RUBBER) / rubber. Fixed for the round, so the browser can
+    /// simulate its cycle with the same number.
+    /// </summary>
+    private double RubberEffectiveness(Player p)
+    {
+        if (p.IsBot || _sim.Rubber <= 0) return 1;
+
+        var ping = Math.Clamp(p.Rtt, 0, 0.5);
+
+        return Math.Round((_sim.Rubber + ping * _sim.PingRubber) / _sim.Rubber, 2);
     }
 
     /// <summary>Somebody joined during the countdown: they can still take part.</summary>
@@ -249,21 +276,35 @@ public sealed partial class Room
 
     private void Analyse(double now)
     {
-        var alive = _players.Where(p => p.Cycle is { Alive: true }).ToList();
+        Player survivor = null;
+        int alive = 0, humans = 0;
+
+        foreach (var p in _players)
+        {
+            // a crash still waiting for a late turn is not decided yet
+            if (p.Doom != null) return;
+
+            if (p.Cycle is not { Alive: true }) continue;
+
+            alive++;
+            survivor = p;
+
+            if (!p.IsBot) humans++;
+        }
 
         if (_participants >= 2)
         {
-            if (alive.Count <= 1 && now - _lastDeath >= 1)
+            if (alive <= 1 && now - _lastDeath >= 1)
             {
-                EndRound(now, alive.FirstOrDefault(), false);
+                EndRound(now, survivor, false);
             }
-            else if (!alive.Any(p => !p.IsBot) && now - _lastDeath >= 4)
+            else if (humans == 0 && now - _lastDeath >= 4)
             {
                 // only AIs left: no need to watch them to the end
                 EndRound(now, null, true);
             }
         }
-        else if (alive.Count == 0 && now - _lastDeath >= 2)
+        else if (alive == 0 && now - _lastDeath >= 2)
         {
             EndRound(now, null, true);
         }
@@ -335,7 +376,7 @@ public sealed partial class Room
             }
         }
 
-        var deaths = _world.Step(_world.Cycles, Dt, OnQueuedTurn);
+        var deaths = _world.Step(_world.Cycles, Dt, QueuedTurn);
 
         _simulated = now;
 
@@ -368,21 +409,29 @@ public sealed partial class Room
 
     private void Remember(Player p)
     {
-        p.History.Add(p.Cycle.Save());
+        var h = p.History;
 
-        if (p.History.Count > HistoryLength)
+        // the oldest state makes room for the newest
+        CycleState reuse = null;
+
+        if (h.Count >= HistoryLength)
         {
-            p.History.RemoveAt(0);
+            reuse = h[0];
+            h.RemoveAt(0);
         }
+
+        h.Add(p.Cycle.Save(reuse));
     }
 
-    private void OnQueuedTurn(Cycle c, int d) => SendTurn(c);
+    private Action<Cycle, int> _onQueuedTurn;
+
+    private Action<Cycle, int> QueuedTurn => _onQueuedTurn ??= (c, _) => SendTurn(c);
 
     private void SendTurn(Cycle c)
     {
         var p = c.Points[^1];
 
-        Send(new TurnEvent(c.Id, c.Turns, p.X, p.Y, p.D, p.T, c.Dir, c.V));
+        SendAll(Wire.Turn(c.Id, c.Turns, p.X, p.Y, p.D, p.T, c.Dir, c.V));
     }
 
     private void Died(Death death, double now)
@@ -425,7 +474,7 @@ public sealed partial class Room
         _lastDeath = _now;
         _playersChanged = true;
 
-        Send(new DieEvent(c.Id, c.X, c.Y, time, silent ? -1 : killerId));
+        SendAll(Wire.Die(c.Id, c.X, c.Y, time, silent ? -1 : killerId));
 
         if (silent || _phase != Phase.Playing) return;
 
@@ -489,7 +538,7 @@ public sealed partial class Room
         {
             if (!Rewind(p, d, dist)) TurnNow(p, d);
         }
-        else
+        else if (p.Pending.Count < MaxPending)
         {
             p.Pending.Add(new TurnCommand(d, n, dist, _now));
         }
@@ -503,7 +552,7 @@ public sealed partial class Room
 
         _world.SetBrake(c, on);
 
-        Send(new BrakeEvent(c.Id, on, c.Time));
+        SendAll(Wire.Brake(c.Id, on, c.Time));
     }
 
     /// <summary>Turns the server had not got to yet: made when the cycle gets there.</summary>
@@ -556,7 +605,7 @@ public sealed partial class Room
             SendTurn(c);
             Remember(p);
         }
-        else
+        else if (c.Queue.Count < MaxPending)
         {
             // too soon after the last one: the queue makes it at the earliest moment
             _world.RequestTurn(c, d);
@@ -568,6 +617,8 @@ public sealed partial class Room
     /// simulates it forward to now. Only within its current straight (never
     /// across an earlier turn) and not further back than MaxRewind.
     /// </summary>
+    private readonly List<Cycle> _one = [];
+
     private bool Rewind(Player p, int d, double dist)
     {
         var c = p.Cycle;
@@ -598,8 +649,13 @@ public sealed partial class Room
 
         if (at < c.LastTurnTime + _sim.Delay * 0.95) return false;
 
+        // the brake is as the player has it now: the rewind only moves the turn
+        var braking = c.Braking;
+
         c.Restore(from);
         c.Queue.Clear();
+
+        if (c.Braking != braking) _world.SetBrake(c, braking);
         c.X += c.Dx * extra;
         c.Y += c.Dy * extra;
         c.Dist = dist;
@@ -622,7 +678,10 @@ public sealed partial class Room
 
             if (dt <= 1e-9) break;
 
-            var deaths = _world.Step([c], dt, OnQueuedTurn);
+            _one.Clear();
+            _one.Add(c);
+
+            var deaths = _world.Step(_one, dt, QueuedTurn);
 
             foreach (var death in deaths)
             {
@@ -641,21 +700,31 @@ public sealed partial class Room
     // -----------------------------------------------------------------------
     // What browsers are told
 
-    private static double[] Wire(Cycle c) =>
-    [
-        c.Id, Json.R3(c.X), Json.R3(c.Y), c.Dir, Math.Round(c.V, 4), Math.Round(c.A, 4), Math.Round(c.LastTs, 5),
-        Math.Round(c.Rubber, 4), Math.Round(c.BrakeRes, 4), c.Braking ? 1 : 0, Math.Round(c.Dist, 4), c.Turns, c.Frozen ? 1 : 0
-    ];
-
-    private void SendSync(double now)
+    /// <summary>
+    /// The state of the cycles, for the browsers to correct what they
+    /// simulated: now and then all of them for everybody, in between each
+    /// player's own cycle for that player alone.
+    /// </summary>
+    private void SendSync(double now, bool all)
     {
-        if (_world == null || _phase == Phase.Idle) return;
+        if (all)
+        {
+            var frame = Wire.Sync(now, _world.Cycles);
 
-        var list = _world.Cycles.Where(c => c.Alive).Select(Wire).ToArray();
+            if (frame != null) SendAll(frame);
 
-        if (list.Length == 0) return;
+            return;
+        }
 
-        Send(new SyncEvent(now, list));
+        foreach (var p in _players)
+        {
+            if (p.Client == null || p.Cycle is not { Alive: true } c) continue;
+
+            _one.Clear();
+            _one.Add(c);
+
+            p.Client.Send(Wire.Sync(now, _one), FrameType.Binary);
+        }
     }
 
     private Snapshot Snapshot()
@@ -671,7 +740,7 @@ public sealed partial class Room
             var p = _players.FirstOrDefault(x => x.Cycle == c);
 
             return new CycleInfo(c.Id, p?.Name ?? "", p?.R ?? 15, p?.G ?? 15, p?.B ?? 15, c.Alive, c.DeathTime,
-                                 c.X, c.Y, c.Dir, c.V, c.A, c.LastTs, c.Rubber, c.BrakeRes, c.Braking,
+                                 c.X, c.Y, c.Dir, c.V, c.A, c.LastTs, c.Rubber, c.RubberEff, c.BrakeRes, c.Braking,
                                  c.Dist, c.Turns, c.LastTurnTime, c.Time,
                                  [.. c.Points.Select(pt => new[] { pt.X, pt.Y, pt.D, pt.T })],
                                  [.. c.Holes.Select(h => new[] { h[0], h[1] })]);

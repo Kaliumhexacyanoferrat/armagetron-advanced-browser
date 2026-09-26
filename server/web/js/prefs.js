@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // What this browser remembers: your name and colour, keys, camera, sound, and
 // the admin tokens of the servers you created.
 
@@ -32,7 +36,14 @@ export const DEFAULT_KEYS = {
   mute: ['KeyM'],
 };
 
-const COLORS = [[15, 3, 3], [3, 15, 3], [3, 3, 15], [15, 15, 3]];
+// A bright colour of any hue on the 0..15 scale: the strongest channel full,
+// the weakest low, so the trail stands out from the floor.
+export function randomColor() {
+  const h = Math.random() * 6, i = Math.floor(h), f = h - i;
+  const hi = 15, lo = 2 + Math.floor(Math.random() * 3);
+  const mid = Math.round(lo + (hi - lo) * (i % 2 ? 1 - f : f));
+  return [[hi, mid, lo], [mid, hi, lo], [lo, hi, mid], [lo, mid, hi], [mid, lo, hi], [hi, lo, mid]][i];
+}
 
 const STORE = 'armagetron.prefs';
 
@@ -53,7 +64,8 @@ function randomId() {
 export class Prefs {
   constructor() {
     const saved = load();
-    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    // somebody new gets a colour of their own
+    const color = randomColor();
     Object.assign(this, {
       name: '',
       r: color[0], g: color[1], b: color[2],

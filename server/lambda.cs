@@ -1,9 +1,14 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Armagetron Advanced in the browser: light cycles on a grid, many servers on
 // one lambda. Anybody can start a server from the front page and runs it as
 // its administrator; everybody else joins from the list or with a link.
 //
 //   GET  ./             the game, a single page application in web/
-//   WS   play           the socket every page opens; JSON messages both ways
+//   WS   play           the socket every page opens: JSON messages both ways, and
+//                       small binary frames for the game itself (Protocol.cs)
 //   GET  api/servers    the running servers, for the front page
 //   GET  media/...      the music, kept in the workspace (too big for assets)
 //
@@ -26,6 +31,8 @@ void Log(string line) => Console.WriteLine(line);
 var lobby = new Lobby(Log);
 
 var hub = new Hub(lobby);
+
+lobby.EverySecond = hub.Sweep;
 
 var api = Inline.Create()
                 .Get("servers", () => new ServerList(lobby.List(), hub.Online));

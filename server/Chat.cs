@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Chat, chat commands and the owner's administration of a room.
 //
 // Lines look like the original's: the name in the player's colour, then the
@@ -255,7 +259,12 @@ public sealed partial class Room
             ? $"{p.Colored} switches to spectator mode and will stop playing the next round."
             : $"{p.Colored} leaves spectator mode and enters the game again.");
 
-        SpawnLate(p);
+        // still in the countdown: straight onto the grid
+        if (!on && _phase == Phase.Countdown)
+        {
+            p.Spectator = false;
+            SpawnLate(p);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -321,11 +330,12 @@ public sealed partial class Room
         _kicked[client.Cid != "" ? client.Cid : client.Address] = _now + 60;
         _kicked[client.Address] = _now + 60;
 
+        // out first: a quick rejoin must not be taken for this room's leaving
+        Leave(target, $"{target.Colored} 0xff7f7fwas kicked.");
+
         client.Send(new Kicked(string.IsNullOrWhiteSpace(reason)
             ? "You have been kicked by the server administrator; please stay away."
             : reason));
-
-        Leave(target, $"{target.Colored} 0xff7f7fwas kicked.");
 
         _log($"{Names.Visible(target.Name)} kicked from '{Settings.Name}' ({Id})");
     }
@@ -343,11 +353,11 @@ public sealed partial class Room
 
         _bans.Add(new Ban(Names.Visible(target.Name), client.Cid, client.Address, until));
 
+        Leave(target, $"{target.Colored} 0xff7f7fwas banned.");
+
         client.Send(new Kicked(string.IsNullOrWhiteSpace(reason)
             ? "You have been banned from this server."
             : $"You have been banned from this server: {reason}"));
-
-        Leave(target, $"{target.Colored} 0xff7f7fwas banned.");
 
         _log($"{Names.Visible(target.Name)} banned from '{Settings.Name}' ({Id})");
 

@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The round as this browser sees it.
 //
 // Every cycle is simulated here with the same rules as on the server
@@ -51,7 +55,7 @@ export class Game {
       const c = new Cycle(ci.id, ci.x, ci.y, ci.dir, ci.time, sim);
       Object.assign(c, {
         v: ci.v, a: ci.a, lastTs: ci.lastTs, rubber: ci.rubber, brakeRes: ci.brakeRes, braking: ci.braking,
-        dist: ci.dist, turns: ci.turns, lastTurnTime: ci.lastTurnTime, time: ci.time,
+        dist: ci.dist, turns: ci.turns, lastTurnTime: ci.lastTurnTime, time: ci.time, rubberEff: ci.rubberEff ?? 1,
         alive: ci.alive, deathTime: ci.deathTime,
       });
       c.points = ci.points.map(([x, y, d, t]) => ({ x, y, d, t }));
@@ -84,8 +88,10 @@ export class Game {
   }
 
   update(serverNow) {
+    this.frameNow = serverNow;
     if (!this.world || this.phase === 'idle') return;
     if (serverNow <= this.start) return;
+    if (this.phase === 'countdown') this.phase = 'playing';
 
     const target = this.start + Math.floor((serverNow - this.start) / DT + EPS) * DT;
     let steps = 0;
@@ -126,7 +132,10 @@ export class Game {
 
   // Where to draw a cycle: its simulated position, a little ahead to the
   // exact moment, plus what is left of a correction being smoothed away.
-  display(c, serverNow) {
+  display(c, serverNow = this.frameNow) {
+    // asked for again and again in a frame (walls, bike, tags, map, sound): worked out once
+    const k = c.disp;
+    if (k && k.now === serverNow && k.time === c.time && k.cx === c.x && k.cy === c.y && k.alive === c.alive && k.frozen === c.frozen) return k;
     let x = c.x, y = c.y;
     if (c.alive && !c.frozen && serverNow > c.time && !c.rubberActive) {
       const ahead = Math.min(serverNow - c.time, 2 * DT) * c.speed();
@@ -138,7 +147,9 @@ export class Game {
       x += v.ox;
       y += v.oy;
     }
-    return { x, y, dist: c.dist + (c.alive && !c.frozen ? Math.min(Math.max(0, serverNow - c.time), 2 * DT) * c.speed() : 0) };
+    const dist = c.dist + (c.alive && !c.frozen ? Math.min(Math.max(0, serverNow - c.time), 2 * DT) * c.speed() : 0);
+    c.disp = { x, y, dist, now: serverNow, time: c.time, cx: c.x, cy: c.y, alive: c.alive, frozen: c.frozen };
+    return c.disp;
   }
 
   // ---------------------------------------------------------------------
@@ -154,7 +165,7 @@ export class Game {
 
   queuedTurn(c, d) {
     if (c.id === this.you) this.sendTurn(c, d);
-    this.emit('turn', c, d);
+    else this.emit('turn', c, d);
   }
 
   sendTurn(c, d) {

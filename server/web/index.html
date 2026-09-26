@@ -70,14 +70,19 @@
         <tr><td><kbd>Enter</kbd></td><td>chat</td></tr>
         <tr><td><kbd>Tab</kbd></td><td>score table</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>menu, settings and keys</td></tr>
+        <tr><td><kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>Enter</kbd></td><td>move through menus and this page</td></tr>
       </table>
     </section>
   </main>
 
   <footer>
     <p>
-      A browser port of <a href="https://www.armagetronad.org/" target="_blank" rel="noopener">Armagetron Advanced</a>,
-      with its textures, models, sounds and music, under the GNU General Public License version 2.
+      An unofficial browser port of <a href="https://www.armagetronad.net/" target="_blank" rel="noopener">Armagetron Advanced</a>
+      by Manuel Moos and the Armagetron Advanced team, with its textures, models, sounds, font and music.
+      Free software under the <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser/blob/main/COPYING.txt" target="_blank" rel="noopener">GNU GPL, version 2 or later</a>,
+      without any warranty:
+      <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser" target="_blank" rel="noopener">source code</a> ·
+      <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser/blob/main/CREDITS.md" target="_blank" rel="noopener">credits</a>.
       The servers run on <a href="https://genhttp.dev/" target="_blank" rel="noopener">GenHTTP</a>.
     </p>
   </footer>
@@ -111,6 +116,7 @@
       <li><button data-menu="invite">Invite friends</button></li>
       <li><button data-menu="settings">Settings</button></li>
       <li id="menu-admin-item"><button data-menu="admin">Server administration</button></li>
+      <li><button data-menu="about">About</button></li>
       <li><button data-menu="leave">Leave server</button></li>
     </ul>
     <p class="help" id="menu-help"></p>
@@ -125,7 +131,7 @@
     <div class="form-grid" id="create-fields"></div>
     <p class="error" id="create-error"></p>
     <div class="actions right">
-      <button value="cancel" formnovalidate>Cancel</button>
+      <button type="button" data-close>Cancel</button>
       <button value="ok" class="primary" id="create-ok">Create and play</button>
     </div>
   </form>
@@ -137,7 +143,7 @@
     <p class="dim small" id="password-text">This server is protected by a password.</p>
     <input id="password-input" type="password" autocomplete="off">
     <div class="actions right">
-      <button value="cancel" formnovalidate>Cancel</button>
+      <button type="button" data-close>Cancel</button>
       <button value="ok" class="primary">Join</button>
     </div>
   </form>
@@ -204,9 +210,27 @@
       </section>
     </div>
     <div class="actions right">
-      <button value="cancel" formnovalidate>Close</button>
+      <button type="button" data-close>Close</button>
       <button value="ok" class="primary">Save the rules</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="about">
+  <form method="dialog">
+    <h2>Armagetron Advanced</h2>
+    <p>An unofficial browser port of <a href="https://www.armagetronad.net/" target="_blank" rel="noopener">Armagetron Advanced</a>,
+      Copyright (C) Manuel Moos and the Armagetron Advanced development team.</p>
+    <p class="small">Music by Dave Fancella, title screen by Edd Keefe, cockpit by wrtlprnft; textures, sounds and
+      cycle models by the Armagetron Advanced team. Browser port (C) 2026 Andreas Nägeli.</p>
+    <p class="small dim">This program is free software: you can redistribute it and change it under the terms of the
+      GNU General Public License, version 2 or (at your option) any later version. It comes with ABSOLUTELY NO WARRANTY.</p>
+    <p class="small">
+      <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser" target="_blank" rel="noopener">Source code</a> ·
+      <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser/blob/main/COPYING.txt" target="_blank" rel="noopener">License</a> ·
+      <a href="https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser/blob/main/CREDITS.md" target="_blank" rel="noopener">Credits</a>
+    </p>
+    <div class="actions right"><button value="ok" class="primary">OK</button></div>
   </form>
 </dialog>
 
@@ -223,7 +247,7 @@
     </label>
     <label class="field"><span>Reason (optional)</span><input id="ban-reason" maxlength="120"></label>
     <div class="actions right">
-      <button value="cancel" formnovalidate>Cancel</button>
+      <button type="button" data-close>Cancel</button>
       <button value="ok" class="danger">Ban</button>
     </div>
   </form>

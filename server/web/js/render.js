@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Draws the arena the way the original does (src/engine/eDisplay.cpp,
 // src/tron/gWall.cpp, gCycle.cpp, gExplosion.cpp): the two-texture grid floor,
 // the tall rim walls, opaque trails with the lightning texture and a bright
@@ -119,6 +123,13 @@ export class Renderer {
     };
   }
 
+  // a new round: nothing carries over from the last one
+  reset() {
+    this.visual.clear();
+    this.sparks = [];
+    this.rimHeights = [];
+  }
+
   // cycle_body/cycle_wheel with the player's colour where they are transparent
   tint(color) {
     const key = color.map((c) => Math.round(c * 255)).join(',');
@@ -149,8 +160,11 @@ export class Renderer {
 
   resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2) * (this.scale ?? 1);
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    // read the layout once a frame; project() and the name tags use these
+    this.cssW = this.canvas.clientWidth;
+    this.cssH = this.canvas.clientHeight;
+    const w = Math.max(1, Math.round(this.cssW * dpr));
+    const h = Math.max(1, Math.round(this.cssH * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
@@ -172,7 +186,7 @@ export class Renderer {
     const cy = m[1] * x + m[5] * y + m[9] * z + m[13];
     const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
     if (cw <= 0.01) return null;
-    return { x: (cx / cw + 1) / 2 * this.canvas.clientWidth, y: (1 - cy / cw) / 2 * this.canvas.clientHeight, depth: cw };
+    return { x: (cx / cw + 1) / 2 * this.cssW, y: (1 - cy / cw) / 2 * this.cssH, depth: cw };
   }
 
   draw(scene, camera, time, dt) {
@@ -203,10 +217,13 @@ export class Renderer {
     const gl = this.gl;
     const s = scene.world.map.size;
     const f = this.floorMesh;
-    f.reset();
-    f.v(0, 0, 0); f.v(s, 0, 0); f.v(s, s, 0);
-    f.v(0, 0, 0); f.v(s, s, 0); f.v(0, s, 0);
-    f.upload();
+    if (this.floorSize !== s) {
+      this.floorSize = s;
+      f.reset();
+      f.v(0, 0, 0); f.v(s, 0, 0); f.v(s, s, 0);
+      f.v(0, 0, 0); f.v(s, s, 0); f.v(0, s, 0);
+      f.upload();
+    }
     gl.useProgram(this.floorProg.p);
     gl.uniformMatrix4fv(this.floorProg.u.uMvp, false, this.mvp);
     gl.uniform3fv(this.floorProg.u.uFloor, this.floorColor);
@@ -288,7 +305,7 @@ export class Renderer {
           lineAlpha = 1 - t;
         }
       }
-      const base = trailColor(scene.names.get(c.id)?.color ?? [1, 1, 1]);
+      const base = trailOf(scene.names.get(c.id));
       const disp = scene.display(c);
       const end = c.alive ? disp.dist : c.dist;
       const headStart = c.alive ? Math.max(0, end - 5) : Infinity;
@@ -523,7 +540,6 @@ export class Renderer {
     // explosions and chat pyramids as lines and triangles
     const lines = this.lines;
     lines.reset();
-    scene.explosions = scene.explosions.filter((e) => time - e.time < 4);
     for (const e of scene.explosions) {
       const t = time - e.time;
       if (t < 0) continue;
@@ -575,7 +591,7 @@ export class Renderer {
     const step = Math.min(dt, 0.1);
     for (const c of world.cycles.values()) {
       if (!c.alive || c.frozen) continue;
-      for (const side of [1, -1]) {
+      for (let side = 1; side >= -1; side -= 2) {
         const hit = world.ray(c.x, c.y, -c.dy * side, c.dx * side, 0.25, c, c.time);
         if (!hit || this.sparks.length > 600) continue;
         if (Math.random() > 0.6) continue;
@@ -600,7 +616,8 @@ export class Renderer {
     }
     const glow = this.glow;
     glow.reset();
-    this.sparks = this.sparks.filter((s) => {
+    let kept = 0;
+    for (const s of this.sparks) {
       s.vz -= 5 * step;
       s.x += s.vx * step;
       s.y += s.vy * step;
@@ -613,18 +630,27 @@ export class Renderer {
       }
       s.heat -= step;
       const a = Math.max(0, Math.min(1, s.heat + 1.5 - 2));
-      if (s.heat < -1.5) return false;
+      if (s.heat < -1.5) continue;
       const tl = Math.min(0.2, s.bounce) * 0.8;
       glow.v(s.x, s.y, s.z, 0, 0, s.color[0], s.color[1], s.color[2], a);
       glow.v(s.x - s.vx * tl, s.y - s.vy * tl, Math.max(0, s.z - s.vz * tl), 0, 0, s.color[0], s.color[1], s.color[2], a);
-      return true;
-    });
+      this.sparks[kept++] = s;
+    }
+    this.sparks.length = kept;
     glow.upload();
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     glow.draw();
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 }
+
+// the trail colour of a player, worked out once
+export function trailOf(info) {
+  if (!info) return WHITE;
+  return (info.trail ??= trailColor(info.color));
+}
+
+const WHITE = [1, 1, 1];
 
 // se_MakeColorValid(c, 0.5): a trail too dark or too close to the floor gets lifted
 export function trailColor(color, factor = 0.5) {

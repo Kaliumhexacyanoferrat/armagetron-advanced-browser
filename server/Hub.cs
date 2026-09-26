@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // The websocket handler behind "play". One instance serves every socket. It
 // knows who is connected and hands each message to the lobby (list, create,
 // join) or to the room the client is in. Rooms process what they are handed
@@ -9,31 +13,68 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
 
     public int Online => _clients.Count;
 
+    /// <summary>Connections from one address at most (a household or an office shares one).</summary>
+    private const int MaxPerAddress = 16;
+
     public ValueTask OnConnected(IReactiveConnection connection)
     {
-        var client = new Client(connection);
-
-        _clients[connection] = client;
-
-        if (_clients.Count > Lobby.MaxClients)
+        try
         {
-            client.Close("The server is full right now. Please try again later.");
-            return ValueTask.CompletedTask;
-        }
+            var client = new Client(connection);
 
-        client.Send(new Welcome(Lobby.Version, lobby.Now));
+            _clients[connection] = client;
+
+            if (_clients.Count > Lobby.MaxClients)
+            {
+                client.Close("The server is full right now. Please try again later.");
+                return ValueTask.CompletedTask;
+            }
+
+            if (_clients.Values.Count(c => c.Address == client.Address) > MaxPerAddress)
+            {
+                client.Close("Too many connections from your address.");
+                return ValueTask.CompletedTask;
+            }
+
+            client.Send(new Welcome(Lobby.Version, lobby.Now));
+        }
+        catch (Exception e)
+        {
+            lobby.Log($"connect failed: {e.Message}");
+        }
 
         return ValueTask.CompletedTask;
     }
 
     public ValueTask OnMessage(IReactiveConnection connection, IWebsocketFrame frame)
     {
-        if (!_clients.TryGetValue(connection, out var client))
+        // nothing a browser sends may break the connection's handler: a
+        // handler that throws is never closed (OnClose does not run)
+        try
         {
-            return ValueTask.CompletedTask;
+            Handle(connection, frame);
+        }
+        catch (Exception e)
+        {
+            lobby.Log($"message failed: {e.Message}");
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    private void Handle(IReactiveConnection connection, IWebsocketFrame frame)
+    {
+        if (!_clients.TryGetValue(connection, out var client) || client.Closed)
+        {
+            return;
         }
 
         client.LastSeen = DateTime.UtcNow;
+
+        if (!client.Allow(lobby.Now))
+        {
+            return;
+        }
 
         JsonElement message;
 
@@ -43,7 +84,7 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
 
             if (data.Length > 4096)
             {
-                return ValueTask.CompletedTask;
+                return;
             }
 
             using var doc = JsonDocument.Parse(data);
@@ -52,12 +93,12 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
         }
         catch (Exception)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         if (message.ValueKind != JsonValueKind.Object)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         var type = message.Str("t");
@@ -78,12 +119,38 @@ public sealed class Hub(Lobby lobby) : IReactiveHandler
                 lobby.Handle(client, type, message);
                 break;
 
+            case null:
+                break;
+
             default:
                 client.Room?.Post(client, type, message);
                 break;
         }
+    }
 
-        return ValueTask.CompletedTask;
+    /// <summary>
+    /// Drops connections that went quiet: a browser pings every second, so
+    /// one silent for half a minute is gone without having said so.
+    /// </summary>
+    public void Sweep()
+    {
+        var now = DateTime.UtcNow;
+
+        foreach (var (connection, client) in _clients)
+        {
+            var silent = now - client.LastSeen;
+
+            if (silent > TimeSpan.FromSeconds(30) && !client.Closed)
+            {
+                client.Room?.Post(client, "gone", default);
+                client.Close();
+            }
+            else if (silent > TimeSpan.FromSeconds(90))
+            {
+                // not even the close went through: the connection is dead
+                _clients.TryRemove(connection, out _);
+            }
+        }
     }
 
     // pongs go through the client's queue too: one writer per socket

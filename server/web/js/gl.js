@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Thin WebGL helpers: programs, buffers, textures. The scene itself is in render.js.
 
 export function createContext(canvas) {
@@ -74,11 +78,13 @@ export class DynamicMesh {
     }
   }
 
-  // push one vertex; values in layout order
-  v(...values) {
-    this.ensure(1);
-    this.data.set(values, this.count * this.stride);
-    this.count++;
+  // push one vertex; values in layout order (at most nine: no rest array, no garbage)
+  v(a, b, c, d, e, f, g, h, i) {
+    if ((this.count + 1) * this.stride > this.data.length) this.ensure(1);
+    const x = this.data, o = this.count++ * this.stride;
+    x[o] = a; x[o + 1] = b; x[o + 2] = c;
+    if (this.stride === 3) return;
+    x[o + 3] = d; x[o + 4] = e; x[o + 5] = f; x[o + 6] = g; x[o + 7] = h; x[o + 8] = i;
   }
 
   upload() {

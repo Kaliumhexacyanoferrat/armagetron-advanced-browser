@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // One browser connected over the websocket. Everything the server sends goes
 // through Send, which queues the frame: a single pump per client writes the
 // queue to the socket, so there is never more than one write at a time and a
@@ -13,10 +17,13 @@ public sealed class Client
 {
     private readonly IReactiveConnection _connection;
 
-    private readonly Channel<(byte[] Data, FrameType Type)> _outbox = Channel.CreateBounded<(byte[], FrameType)>(new BoundedChannelOptions(2048)
+    // Wait (not DropWrite): TryWrite then says false when the queue is full,
+    // so a browser that stopped reading is disconnected instead of silently
+    // missing frames and drifting out of step
+    private readonly Channel<(byte[] Data, FrameType Type)> _outbox = Channel.CreateBounded<(byte[], FrameType)>(new BoundedChannelOptions(512)
     {
         SingleReader = true,
-        FullMode = BoundedChannelFullMode.DropWrite
+        FullMode = BoundedChannelFullMode.Wait
     });
 
     private readonly CancellationTokenSource _cancel = new();
@@ -60,7 +67,38 @@ public sealed class Client
     /// <summary>When the last message came in, to drop connections that went silent.</summary>
     public DateTime LastSeen { get; set; } = DateTime.UtcNow;
 
-    public void Send(byte[] frame) => Enqueue(frame, FrameType.Text);
+    // flood protection: a bucket of messages that refills over time
+    private double _tokens = Burst, _tokensAt;
+
+    private int _floods;
+
+    private const double Rate = 40, Burst = 80;
+
+    /// <summary>
+    /// Whether one more message may be handled now. A browser sends a few a
+    /// second (turns, pings, typing); whoever keeps sending far more than that
+    /// is disconnected.
+    /// </summary>
+    public bool Allow(double now)
+    {
+        _tokens = Math.Min(Burst, _tokens + (now - _tokensAt) * Rate);
+        _tokensAt = now;
+
+        if (_tokens >= 1)
+        {
+            _tokens--;
+            return true;
+        }
+
+        if (++_floods > 200)
+        {
+            Close("Too many messages. Please reload the page.");
+        }
+
+        return false;
+    }
+
+    public void Send(byte[] frame, FrameType type = FrameType.Text) => Enqueue(frame, type);
 
     public void Send(object message) => Send(Json.Encode(message));
 

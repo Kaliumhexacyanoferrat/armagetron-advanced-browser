@@ -1,3 +1,7 @@
+// Armagetron Advanced, browser port. Copyright (C) 2026 Andreas Nägeli.
+// Based on Armagetron Advanced, Copyright (C) Manuel Moos and the Armagetron Advanced team.
+// GNU GPL version 2 or later, see COPYING.txt. Source: https://github.com/Kaliumhexacyanoferrat/armagetron-advanced-browser
+
 // Sound as in src/engine/eSoundMixer.cpp and gCycle.cpp: every cycle has its
 // engine running, pitched by its speed (1.0 at CYCLE_SOUND_SPEED 20) with a
 // little doppler, panned and quieter with distance; turns, explosions and
@@ -21,12 +25,20 @@ export class Audio {
     this.engines = new Map();
     this.music = null;
     this.track = null;
+    // a hidden tab draws no frames, so nothing would fade the engines out
+    document.addEventListener('visibilitychange', () => {
+      if (!this.ctx) return;
+      if (document.hidden) this.ctx.suspend();
+      else this.ctx.resume();
+    });
   }
 
   // browsers only start sound after a click or key press
   unlock() {
+    // the music waited for this too
+    if (this.music?.paused) this.music.play().catch(() => {});
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      if (this.ctx.state === 'suspended' && !document.hidden) this.ctx.resume();
       return;
     }
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -161,6 +173,7 @@ export class Audio {
       this.music.pause();
       this.music = null;
     }
+    this.song = '';
     if (!this.prefs.music || !kind) return;
     const lists = { title: ['media/titletrack.ogg'], game: ['media/fortresswalk.ogg', 'media/doIknowyou.ogg', 'media/when.ogg'] };
     const list = lists[kind];
@@ -174,6 +187,7 @@ export class Audio {
       });
       a.addEventListener('error', () => { if (this.music === a) this.music = null; });
       this.music = a;
+      this.song = decodeURIComponent(list[i % list.length].split('/').pop().replace('.ogg', ''));
       a.play().catch(() => {});
     };
     start();
